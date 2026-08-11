@@ -131,6 +131,10 @@ pub fn change_tray_icon(app: &AppHandle, icon: TrayIconState) {
     // Store current state
     app.state::<CurrentTrayIconState>().set(icon);
 
+    // handy-addon: the one call every recording start/stop/cancel path funnels
+    // through, on every platform and regardless of overlay/tray settings.
+    crate::addons::on_tray_state(app, icon);
+
     let warning = crate::secure_input::tray_warning_active(app);
     let icon_path = get_icon_path(theme, icon, warning);
 

@@ -1,4 +1,5 @@
 mod actions;
+mod addons; // handy-addon: fork-local features; see ADDONS.md
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
 mod audio_feedback;
@@ -335,6 +336,8 @@ fn initialize_core_logic(app_handle: &AppHandle) {
 
     // Create the recording overlay window (hidden by default)
     utils::create_recording_overlay(app_handle);
+
+    addons::init(app_handle); // handy-addon
 }
 
 #[tauri::command]
@@ -961,6 +964,11 @@ pub fn run(cli_args: CliArgs) {
             Ok(())
         })
         .on_window_event(|window, event| match event {
+            // handy-addon: addon windows are decoration-only. Without this they
+            // would inherit the close-to-tray + activation-policy behaviour
+            // meant for the settings window, and multiply the ThemeChanged tray
+            // rebuild by the number of attached displays.
+            _ if addons::owns_window(window.label()) => {}
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _res = window.hide();

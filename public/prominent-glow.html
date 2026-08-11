@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Recording indicator</title>
+
+    <!--
+      Handy addon: the "Prominent" recording indicator.
+
+      This file lives in public/ rather than src/, which means Vite copies it to
+      the dist root verbatim and never transforms it. Two consequences worth
+      knowing before editing:
+
+        * It must stay fully self-contained. No imports, no bundler, no
+          Tailwind, no TypeScript, no HMR.
+        * It has no Tauri JS API. Addon window labels are in no capability file
+          (deliberately — the glow needs no IPC), so `listen`/`invoke` would be
+          rejected. Rust drives this page with `eval`, which is not ACL-gated.
+
+      Everything Rust can change is a CSS custom property under :root, set via
+      `window.__glow.set({'glow-alpha': 0.55})`.
+    -->
+    <style>
+      :root {
+        /* Space-separated sRGB so alpha can be composed with calc(). */
+        --glow-color: 255 138 42;
+        /* Peak alpha at the very screen edge. Rust overrides this. */
+        --glow-alpha: 0.55;
+        /* Distance from each edge at which the tint reaches zero, as a
+           percentage of that axis. 20% per side leaves the middle 60% x 60% of
+           the screen completely untinted. */
+        --glow-spread: 20%;
+        /* A crisp hairline right at the bezel. This is what keeps the state
+           readable against an orange wallpaper or a warm photo. */
+        --glow-rim: 2px;
+        --glow-rim-alpha: 0.9;
+        /* Breathing pulse: dips to this fraction and back. */
+        --glow-pulse-floor: 0.72;
+        --glow-pulse-period: 4.6s;
+        --glow-in: 220ms;
+        --glow-out: 260ms;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+
+      /* The real click-through is the OS-level input shape / ignoresMouseEvents
+         set by Rust. This only stops the webview itself from ever showing a
+         caret, hover state or text cursor. */
+      html,
+      body,
+      #stage,
+      #stage * {
+        pointer-events: none !important;
+        user-select: none;
+        -webkit-user-select: none;
+        cursor: default;
+      }
+
+      /* Layer 1 — enter/leave fade. Opacity only, so it stays on the
+         compositor. */
+      #stage {
+        position: fixed;
+        inset: 0;
+        opacity: 0;
+        transition: opacity var(--glow-in) ease-out;
+      }
+      #stage.visible {
+        opacity: 1;
+      }
+      #stage.leaving {
+        opacity: 0;
+        transition: opacity var(--glow-out) ease-in;
+      }
+
+      /* Layer 2 — the breathing pulse. Its own element so an infinite animation
+         never fights the enter/leave transition over the same property. */
+      #pulse {
+        position: absolute;
+        inset: 0;
+        animation: glow-breathe var(--glow-pulse-period) ease-in-out infinite;
+      }
+      @keyframes glow-breathe {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: var(--glow-pulse-floor);
+        }
+      }
+
+      /* Layer 3 — the glow itself.
+
+         Two background layers, one per axis, each symmetric so a single
+         gradient serves both opposing edges (they never overlap while
+         --glow-spread stays <= 50%). The falloff is a hard rim plus a long
+         faint bloom:
+
+             distance into band  0    .06  .14  .25  .40  .58  .78  1
+             alpha (x --alpha)   1    .72  .48  .30  .17  .09  .03  0
+
+         Corners are the source-over union of the two axes, which produces
+         rounded-rect iso-contours — the "radial, coming in from every side"
+         read — while leaving the centre at exactly zero tint.
+
+         A single radial-gradient was tried and rejected: everything outside the
+         inscribed ellipse clamps to peak alpha, so the four corners (~21% of
+         the screen) go fully saturated. */
+      #edges {
+        position: absolute;
+        inset: 0;
+        background-repeat: no-repeat;
+        background-size: 100% 100%;
+        background-image:
+          linear-gradient(
+            to right,
+            rgb(var(--glow-color) / var(--glow-alpha)) 0,
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.72))
+              calc(var(--glow-spread) * 0.06),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.48))
+              calc(var(--glow-spread) * 0.14),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.3))
+              calc(var(--glow-spread) * 0.25),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.17))
+              calc(var(--glow-spread) * 0.4),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.09))
+              calc(var(--glow-spread) * 0.58),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.03))
+              calc(var(--glow-spread) * 0.78),
+            rgb(var(--glow-color) / 0) var(--glow-spread),
+            rgb(var(--glow-color) / 0) calc(100% - var(--glow-spread)),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.03))
+              calc(100% - var(--glow-spread) * 0.78),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.09))
+              calc(100% - var(--glow-spread) * 0.58),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.17))
+              calc(100% - var(--glow-spread) * 0.4),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.3))
+              calc(100% - var(--glow-spread) * 0.25),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.48))
+              calc(100% - var(--glow-spread) * 0.14),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.72))
+              calc(100% - var(--glow-spread) * 0.06),
+            rgb(var(--glow-color) / var(--glow-alpha)) 100%
+          ),
+          linear-gradient(
+            to bottom,
+            rgb(var(--glow-color) / var(--glow-alpha)) 0,
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.72))
+              calc(var(--glow-spread) * 0.06),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.48))
+              calc(var(--glow-spread) * 0.14),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.3))
+              calc(var(--glow-spread) * 0.25),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.17))
+              calc(var(--glow-spread) * 0.4),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.09))
+              calc(var(--glow-spread) * 0.58),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.03))
+              calc(var(--glow-spread) * 0.78),
+            rgb(var(--glow-color) / 0) var(--glow-spread),
+            rgb(var(--glow-color) / 0) calc(100% - var(--glow-spread)),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.03))
+              calc(100% - var(--glow-spread) * 0.78),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.09))
+              calc(100% - var(--glow-spread) * 0.58),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.17))
+              calc(100% - var(--glow-spread) * 0.4),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.3))
+              calc(100% - var(--glow-spread) * 0.25),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.48))
+              calc(100% - var(--glow-spread) * 0.14),
+            rgb(var(--glow-color) / calc(var(--glow-alpha) * 0.72))
+              calc(100% - var(--glow-spread) * 0.06),
+            rgb(var(--glow-color) / var(--glow-alpha)) 100%
+          );
+      }
+
+      /* Layer 4 — bezel hairline. A border, never a box-shadow: box-shadow on a
+         full-screen element repaints instead of compositing. */
+      #rim {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        border: var(--glow-rim) solid
+          rgb(
+            var(--glow-color) / calc(var(--glow-alpha) * var(--glow-rim-alpha))
+          );
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #pulse {
+          animation: none;
+          opacity: 1;
+        }
+        #stage {
+          --glow-in: 90ms;
+          --glow-out: 90ms;
+        }
+      }
+    </style>
+
+    <script>
+      // Defined before the body parses so an eval() from Rust can never arrive
+      // "too early" and get dropped. Calls made before the DOM exists are
+      // queued and replayed against the real implementation once it attaches.
+      window.__glow = (function () {
+        var pending = [];
+        var impl = null;
+        function forward(name) {
+          return function (arg) {
+            if (impl) impl[name](arg);
+            else pending.push([name, arg]);
+          };
+        }
+        var api = {
+          show: forward("show"),
+          hide: forward("hide"),
+          set: forward("set"),
+        };
+        api.__attach = function (real) {
+          impl = real;
+          for (var i = 0; i < pending.length; i++) {
+            real[pending[i][0]](pending[i][1]);
+          }
+          pending = [];
+        };
+        return api;
+      })();
+    </script>
+  </head>
+
+  <body>
+    <div id="stage">
+      <div id="pulse">
+        <div id="edges"></div>
+        <div id="rim"></div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var stage = document.getElementById("stage");
+        var pulse = document.getElementById("pulse");
+
+        window.__glow.__attach({
+          set: function (vars) {
+            for (var key in vars) {
+              if (!Object.prototype.hasOwnProperty.call(vars, key)) continue;
+              var name = key.charAt(0) === "-" ? key : "--" + key;
+              root.style.setProperty(name, String(vars[key]));
+            }
+          },
+
+          show: function () {
+            stage.classList.remove("leaving");
+            // Restart the pulse so the entrance never begins mid-dip.
+            pulse.style.animation = "none";
+            void pulse.offsetWidth;
+            pulse.style.animation = "";
+            // Force the opacity:0 "before-change" style to resolve so the
+            // transition actually runs. Deliberately not requestAnimationFrame:
+            // a window that was hidden until a moment ago gets no rendering
+            // opportunities, so an rAF callback can be deferred indefinitely
+            // and the fade-in would never start.
+            void getComputedStyle(stage).opacity;
+            stage.classList.add("visible");
+          },
+
+          hide: function () {
+            stage.classList.add("leaving");
+            stage.classList.remove("visible");
+          },
+        });
+      })();
+    </script>
+  </body>
+</html>
