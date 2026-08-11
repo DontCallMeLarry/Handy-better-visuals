@@ -17,7 +17,14 @@ KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 # LibreSSL at /usr/bin/openssl emits PKCS#12 that `security import` accepts.
 # A Homebrew OpenSSL 3 on PATH would default to AES/PBKDF2, which it does not.
+# The legacy pbe/mac algorithms are pinned explicitly below anyway, in case a
+# future LibreSSL changes its defaults.
 OPENSSL=/usr/bin/openssl
+
+# `security import` rejects a PKCS#12 with an *empty* password ("MAC
+# verification failed ... wrong password?"), so use a throwaway one. It only
+# protects a file that lives in a mktemp dir for the duration of this script.
+P12_PASS=handy-local
 
 if security find-identity -v -p codesigning | grep -qF "$CERT_NAME"; then
   echo "Code-signing identity already present: $CERT_NAME"
@@ -47,10 +54,11 @@ echo "Generating self-signed code-signing certificate: $CERT_NAME"
   -keyout "$WORK/key.pem" -out "$WORK/cert.pem" -config "$WORK/openssl.cnf" 2>/dev/null
 
 "$OPENSSL" pkcs12 -export -out "$WORK/identity.p12" \
-  -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -passout pass:
+  -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -passout "pass:$P12_PASS" \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
 
 # -A: no ACL on the private key, so codesign never prompts for keychain access.
-security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "" -A -T /usr/bin/codesign
+security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$P12_PASS" -A -T /usr/bin/codesign
 
 # codesign only accepts an identity whose certificate is trusted for code
 # signing. This is the step that may raise an authentication dialog.
