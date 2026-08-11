@@ -7,7 +7,9 @@
 //! The builder call deliberately mirrors `overlay::create_recording_overlay`
 //! so this stays on the exact configuration upstream already ships and tests.
 
-use tauri::{AppHandle, WebviewUrl};
+// `Manager` is unused by name here but required in scope: the `tauri_panel!`
+// expansion calls `app_handle()` on a `WebviewWindow`.
+use tauri::{AppHandle, Manager, WebviewUrl};
 use tauri_nspanel::{
     tauri_panel, CollectionBehavior, ManagerExt, PanelBuilder, PanelLevel, StyleMask,
 };
