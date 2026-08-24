@@ -33,7 +33,10 @@ if [ ! -f src-tauri/resources/models/silero_vad_v4.onnx ]; then
   exit 1
 fi
 
-if security find-identity -v -p codesigning | grep -qF "$CERT_NAME"; then
+# Captured first: piping security straight into grep -q races a SIGPIPE that
+# pipefail would report as failure even when the identity exists.
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+if printf '%s' "$IDENTITIES" | grep -qF "$CERT_NAME"; then
   echo "Signing with stable local identity: $CERT_NAME"
   CONFIG="$(printf '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"%s"}}}' "$CERT_NAME")"
 else
@@ -47,12 +50,14 @@ fi
 export CMAKE_POLICY_VERSION_MINIMUM="${CMAKE_POLICY_VERSION_MINIMUM:-3.5}"
 
 # bundle_dmg.sh drives Finder over AppleScript to position the icons in the DMG
-# window. That needs Apple Events automation permission for the calling process,
-# which a non-interactive shell does not have — it dies with exit 64 and takes
-# the whole bundle step with it. Tauri passes --skip-jenkins when CI is set,
-# which drops only that cosmetic step. Interactive runs keep the pretty DMG.
-if [ ! -t 1 ] && [ -z "${CI:-}" ]; then
-  echo "Non-interactive shell: building a plain DMG (no Finder icon layout)."
+# window. That needs Apple Events automation permission (System Settings →
+# Privacy & Security → Automation → your terminal → Finder); without it the
+# step dies with exit 64 and takes the whole bundle with it — even in an
+# interactive run, if the permission was never granted or once denied. Tauri
+# passes --skip-jenkins when CI is set, which drops only that cosmetic step,
+# so skip it by default and let HANDY_PRETTY_DMG=1 opt back in.
+if [ -z "${HANDY_PRETTY_DMG:-}" ] && [ -z "${CI:-}" ]; then
+  echo "Building a plain DMG (no Finder icon layout; HANDY_PRETTY_DMG=1 opts in)."
   export CI=true
 fi
 

@@ -48,8 +48,14 @@ if [ ! -d "$APP_SRC" ]; then
   exit 1
 fi
 
+# codesign writes its report line-by-line to unbuffered stderr; piping that
+# into a reader that exits early (grep -q, awk with exit) races a SIGPIPE,
+# which pipefail turns into exit 141 and set -e turns fatal. Capture first,
+# parse the variable.
 authority_of() {
-  codesign -dv --verbose=2 "$1" 2>&1 | awk -F'=' '/^Authority=/ {print $2; exit}'
+  local info
+  info="$(codesign -dv --verbose=2 "$1" 2>&1 || true)"
+  printf '%s\n' "$info" | awk -F'=' '/^Authority=/ {print $2; exit}'
 }
 plist_of() {
   /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null || echo ''
@@ -63,8 +69,9 @@ sleep 1
 
 # 2. If the stable identity exists but this build is ad-hoc (certificate created
 #    after the build), re-sign in place rather than forcing a full rebuild.
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$CERT_NAME" \
-   && ! codesign -dv --verbose=2 "$APP_SRC" 2>&1 | grep -qF "$CERT_NAME"; then
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+if printf '%s' "$IDENTITIES" | grep -qF "$CERT_NAME" \
+   && [ "$(authority_of "$APP_SRC")" != "$CERT_NAME" ]; then
   echo "Re-signing with stable identity: $CERT_NAME"
   codesign --force --deep --options runtime \
     --entitlements "$REPO_ROOT/src-tauri/Entitlements.plist" \

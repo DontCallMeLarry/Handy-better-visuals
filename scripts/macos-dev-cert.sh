@@ -26,7 +26,7 @@ OPENSSL=/usr/bin/openssl
 # protects a file that lives in a mktemp dir for the duration of this script.
 P12_PASS=handy-local
 
-if security find-identity -v -p codesigning | grep -qF "$CERT_NAME"; then
+if [ "$(security find-identity -v -p codesigning 2>/dev/null | grep -cF "$CERT_NAME" || true)" -gt 0 ]; then
   echo "Code-signing identity already present: $CERT_NAME"
   exit 0
 fi
@@ -65,7 +65,7 @@ security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$P12_PASS" -A -T /usr/bi
 echo "Marking the certificate as trusted for code signing (may prompt)..."
 security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem"
 
-if security find-identity -v -p codesigning | grep -qF "$CERT_NAME"; then
+if [ "$(security find-identity -v -p codesigning 2>/dev/null | grep -cF "$CERT_NAME" || true)" -gt 0 ]; then
   echo
   echo "Ready. \"$CERT_NAME\" is a valid code-signing identity."
   echo "scripts/build-macos-local.sh will pick it up automatically."
