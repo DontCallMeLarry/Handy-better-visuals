@@ -18,7 +18,10 @@
           rejected. Rust drives this page with `eval`, which is not ACL-gated.
 
       Everything Rust can change is a CSS custom property under :root, set via
-      `window.__glow.set({'glow-alpha': 0.55})`.
+      `window.__glow.set({'glow-alpha': 0.55})`. The vignette itself is drawn
+      by a WebGL fragment shader (so the two revolving clear windows cost GPU
+      fill only); the CSS gradient layers underneath are the static fallback
+      when WebGL is unavailable, lost, or prefers-reduced-motion is set.
     -->
     <style>
       :root {
@@ -39,6 +42,14 @@
         --glow-pulse-period: 4.6s;
         --glow-in: 220ms;
         --glow-out: 260ms;
+        /* Two clear windows, 180deg apart, sweeping clockwise. Angles are
+           measured from the screen centre, so a window looks wider on the
+           short edges than on the long ones — that is expected. */
+        --glow-spin-period: 10s;
+        /* Angular width that is fully transparent, per window. */
+        --glow-gap: 40deg;
+        /* Ramp on either side of the window, from fully clear to full glow. */
+        --glow-gap-feather: 35deg;
       }
 
       html,
@@ -196,6 +207,25 @@
           );
       }
 
+      /* Layer 3b — the WebGL glow. Same vignette as #edges + #rim, plus the
+         two revolving clear windows. Takes over once the context is up
+         (#stage.gl). If WebGL is unavailable, or the context is lost, the CSS
+         layers stay in charge and the glow is simply static. */
+      #gl {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+      }
+      #stage.gl #gl {
+        display: block;
+      }
+      #stage.gl #edges,
+      #stage.gl #rim {
+        display: none;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         #pulse {
           animation: none;
@@ -241,6 +271,7 @@
   <body>
     <div id="stage">
       <div id="pulse">
+        <canvas id="gl"></canvas>
         <div id="edges"></div>
         <div id="rim"></div>
       </div>
@@ -251,6 +282,284 @@
         var root = document.documentElement;
         var stage = document.getElementById("stage");
         var pulse = document.getElementById("pulse");
+        var canvas = document.getElementById("gl");
+
+        // ---------------------------------------------------------------
+        // CSS custom properties -> shader parameters.
+        //
+        // Re-read whenever Rust calls set(); render() itself never touches
+        // getComputedStyle.
+        // ---------------------------------------------------------------
+        var params = {};
+
+        function cssVar(name) {
+          return getComputedStyle(root).getPropertyValue(name).trim();
+        }
+        function num(text, fallback) {
+          var v = parseFloat(text);
+          return isFinite(v) ? v : fallback;
+        }
+        // "40deg" | "0.7rad" | "0.1turn" -> radians
+        function angle(text, fallbackRad) {
+          var v = parseFloat(text);
+          if (!isFinite(v)) return fallbackRad;
+          if (/turn\s*$/.test(text)) return v * Math.PI * 2;
+          if (/rad\s*$/.test(text)) return v;
+          return (v * Math.PI) / 180;
+        }
+        // "10s" | "10000ms" -> milliseconds
+        function duration(text, fallbackMs) {
+          var v = parseFloat(text);
+          if (!isFinite(v)) return fallbackMs;
+          return /ms\s*$/.test(text) ? v : v * 1000;
+        }
+        function readParams() {
+          var color = cssVar("--glow-color")
+            .split(/[\s,\/]+/)
+            .map(Number);
+          params.color =
+            color.length >= 3 && color.slice(0, 3).every(isFinite)
+              ? [color[0] / 255, color[1] / 255, color[2] / 255]
+              : [1, 138 / 255, 42 / 255];
+          params.alpha = num(cssVar("--glow-alpha"), 0.55);
+          var spread = cssVar("--glow-spread");
+          params.spread = /%\s*$/.test(spread)
+            ? num(spread, 20) / 100
+            : num(spread, 0.2);
+          params.rim = num(cssVar("--glow-rim"), 2); // CSS px
+          params.rimAlpha = num(cssVar("--glow-rim-alpha"), 0.9);
+          params.period = Math.max(
+            500,
+            duration(cssVar("--glow-spin-period"), 10000),
+          );
+          params.gapHalf =
+            angle(cssVar("--glow-gap"), (40 * Math.PI) / 180) / 2;
+          params.feather = angle(
+            cssVar("--glow-gap-feather"),
+            (35 * Math.PI) / 180,
+          );
+        }
+        readParams();
+
+        // ---------------------------------------------------------------
+        // WebGL. One full-screen triangle; all the work is in the fragment
+        // shader. Any failure leaves `gl` null and the CSS layers visible.
+        // ---------------------------------------------------------------
+        var gl = null;
+        var uni = null;
+        var raf = 0;
+        var stopTimer = 0;
+
+        var VERT =
+          "attribute vec2 a_pos;" +
+          "void main(){gl_Position=vec4(a_pos,0.0,1.0);}";
+
+        var FRAG = [
+          "#ifdef GL_FRAGMENT_PRECISION_HIGH",
+          "precision highp float;",
+          "#else",
+          "precision mediump float;",
+          "#endif",
+          "uniform vec2 u_size;", // drawing buffer, device px
+          "uniform vec3 u_color;", // 0..1
+          "uniform float u_alpha;", // --glow-alpha
+          "uniform float u_spread;", // --glow-spread as a fraction
+          "uniform float u_rim;", // --glow-rim in device px
+          "uniform float u_rimAlpha;", // --glow-rim-alpha
+          "uniform float u_angle;", // current rotation, radians
+          "uniform float u_gapHalf;", // half of --glow-gap, radians
+          "uniform float u_feather;", // --glow-gap-feather, radians
+          "const float PI = 3.141592653589793;",
+          // Piecewise-linear copy of the stop table in #edges:
+          //   t     0    .06  .14  .25  .40  .58  .78  1
+          //   alpha 1    .72  .48  .30  .17  .09  .03  0
+          "float falloff(float t){",
+          "  if (t >= 1.0) return 0.0;",
+          "  if (t < 0.06) return mix(1.00, 0.72, t / 0.06);",
+          "  if (t < 0.14) return mix(0.72, 0.48, (t - 0.06) / 0.08);",
+          "  if (t < 0.25) return mix(0.48, 0.30, (t - 0.14) / 0.11);",
+          "  if (t < 0.40) return mix(0.30, 0.17, (t - 0.25) / 0.15);",
+          "  if (t < 0.58) return mix(0.17, 0.09, (t - 0.40) / 0.18);",
+          "  if (t < 0.78) return mix(0.09, 0.03, (t - 0.58) / 0.20);",
+          "  return mix(0.03, 0.00, (t - 0.78) / 0.22);",
+          "}",
+          "void main(){",
+          "  vec2 p = gl_FragCoord.xy;",
+          // Distance to the nearest edge on each axis. gl_FragCoord has its
+          // origin bottom-left; the vignette is symmetric so that is fine.
+          "  vec2 edge = min(p, u_size - p);",
+          "  float ax = falloff(edge.x / (u_size.x * u_spread)) * u_alpha;",
+          "  float ay = falloff(edge.y / (u_size.y * u_spread)) * u_alpha;",
+          // Source-over union of the two axes, exactly like the two
+          // background layers in #edges.
+          "  float bloom = ax + ay - ax * ay;",
+          // The hairline, painted over the bloom like the #rim border.
+          "  float rim = min(edge.x, edge.y) < u_rim ? u_alpha * u_rimAlpha : 0.0;",
+          "  float a = rim + bloom * (1.0 - rim);",
+          // Two clear windows 180deg apart. -d.y flips to y-down so that an
+          // increasing angle sweeps clockwise on screen.
+          "  vec2 d = p - u_size * 0.5;",
+          "  float ang = atan(-d.y, d.x);",
+          // Signed angular distance to the nearest window centre.
+          "  float rel = mod(ang - u_angle + PI * 0.5, PI) - PI * 0.5;",
+          "  a *= smoothstep(u_gapHalf, u_gapHalf + u_feather, abs(rel));",
+          // Premultiplied output; the context is premultipliedAlpha: true.
+          "  gl_FragColor = vec4(u_color * a, a);",
+          "}",
+        ].join("\n");
+
+        function initGl() {
+          // Reduced motion: keep the static CSS glow, never spin.
+          if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            return;
+          }
+          var attrs = {
+            alpha: true,
+            premultipliedAlpha: true,
+            antialias: false,
+            depth: false,
+            stencil: false,
+            preserveDrawingBuffer: false,
+            powerPreference: "low-power",
+          };
+          var ctx =
+            canvas.getContext("webgl", attrs) ||
+            canvas.getContext("experimental-webgl", attrs);
+          if (!ctx) return;
+
+          function compile(type, src) {
+            var shader = ctx.createShader(type);
+            ctx.shaderSource(shader, src);
+            ctx.compileShader(shader);
+            if (!ctx.getShaderParameter(shader, ctx.COMPILE_STATUS)) {
+              console.warn(
+                "prominent-glow shader:",
+                ctx.getShaderInfoLog(shader),
+              );
+              return null;
+            }
+            return shader;
+          }
+          var vs = compile(ctx.VERTEX_SHADER, VERT);
+          var fs = compile(ctx.FRAGMENT_SHADER, FRAG);
+          if (!vs || !fs) return;
+
+          var prog = ctx.createProgram();
+          ctx.attachShader(prog, vs);
+          ctx.attachShader(prog, fs);
+          ctx.linkProgram(prog);
+          if (!ctx.getProgramParameter(prog, ctx.LINK_STATUS)) {
+            console.warn(
+              "prominent-glow program:",
+              ctx.getProgramInfoLog(prog),
+            );
+            return;
+          }
+          ctx.useProgram(prog);
+
+          var buf = ctx.createBuffer();
+          ctx.bindBuffer(ctx.ARRAY_BUFFER, buf);
+          ctx.bufferData(
+            ctx.ARRAY_BUFFER,
+            new Float32Array([-1, -1, 3, -1, -1, 3]),
+            ctx.STATIC_DRAW,
+          );
+          var loc = ctx.getAttribLocation(prog, "a_pos");
+          ctx.enableVertexAttribArray(loc);
+          ctx.vertexAttribPointer(loc, 2, ctx.FLOAT, false, 0, 0);
+
+          ctx.disable(ctx.BLEND);
+          ctx.disable(ctx.DEPTH_TEST);
+          ctx.clearColor(0, 0, 0, 0);
+
+          uni = {};
+          [
+            "u_size",
+            "u_color",
+            "u_alpha",
+            "u_spread",
+            "u_rim",
+            "u_rimAlpha",
+            "u_angle",
+            "u_gapHalf",
+            "u_feather",
+          ].forEach(function (name) {
+            uni[name] = ctx.getUniformLocation(prog, name);
+          });
+
+          // No restore path on purpose: fall back to the static CSS glow for
+          // the rest of this page's life rather than juggle two renderers.
+          canvas.addEventListener("webglcontextlost", function () {
+            stop();
+            gl = null;
+            stage.classList.remove("gl");
+          });
+
+          gl = ctx;
+          stage.classList.add("gl");
+        }
+
+        function syncSize() {
+          var dpr = window.devicePixelRatio || 1;
+          var w = Math.max(1, Math.round(window.innerWidth * dpr));
+          var h = Math.max(1, Math.round(window.innerHeight * dpr));
+          if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+          }
+          gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        }
+
+        function render(now) {
+          if (!gl) return;
+          syncSize();
+          var dpr = window.devicePixelRatio || 1;
+          var phase = (now % params.period) / params.period;
+          gl.uniform2f(
+            uni.u_size,
+            gl.drawingBufferWidth,
+            gl.drawingBufferHeight,
+          );
+          gl.uniform3f(
+            uni.u_color,
+            params.color[0],
+            params.color[1],
+            params.color[2],
+          );
+          gl.uniform1f(uni.u_alpha, params.alpha);
+          gl.uniform1f(uni.u_spread, params.spread);
+          gl.uniform1f(uni.u_rim, params.rim * dpr);
+          gl.uniform1f(uni.u_rimAlpha, params.rimAlpha);
+          gl.uniform1f(uni.u_angle, phase * Math.PI * 2);
+          gl.uniform1f(uni.u_gapHalf, params.gapHalf);
+          gl.uniform1f(uni.u_feather, params.feather);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        function frame(now) {
+          raf = 0;
+          render(now);
+          raf = requestAnimationFrame(frame);
+        }
+        function start() {
+          clearTimeout(stopTimer);
+          stopTimer = 0;
+          if (gl && !raf) raf = requestAnimationFrame(frame);
+        }
+        function stop() {
+          if (raf) cancelAnimationFrame(raf);
+          raf = 0;
+        }
+
+        // Rust re-places the window before every show; the size change can
+        // land as a separate event, so redraw on it.
+        window.addEventListener("resize", function () {
+          if (gl) render(performance.now());
+        });
+
+        initGl();
+        if (gl) render(performance.now());
 
         window.__glow.__attach({
           set: function (vars) {
@@ -259,6 +568,9 @@
               var name = key.charAt(0) === "-" ? key : "--" + key;
               root.style.setProperty(name, String(vars[key]));
             }
+            // The running frame loop picks these up on its next frame, which
+            // is what makes the intensity slider preview live.
+            readParams();
           },
 
           show: function () {
@@ -267,6 +579,14 @@
             pulse.style.animation = "none";
             void pulse.offsetWidth;
             pulse.style.animation = "";
+            // First frame synchronously, before the fade-in can reveal an
+            // empty canvas. rAF alone is not enough here for the same reason
+            // as below: a window that was hidden until a moment ago has had
+            // no rendering opportunities yet.
+            if (gl) {
+              render(performance.now());
+              start();
+            }
             // Force the opacity:0 "before-change" style to resolve so the
             // transition actually runs. Deliberately not requestAnimationFrame:
             // a window that was hidden until a moment ago gets no rendering
@@ -279,6 +599,10 @@
           hide: function () {
             stage.classList.add("leaving");
             stage.classList.remove("visible");
+            // Keep drawing through the fade-out (--glow-out is 260ms; Rust
+            // hides the window at 320ms), then idle the loop.
+            clearTimeout(stopTimer);
+            stopTimer = setTimeout(stop, 400);
           },
         });
       })();

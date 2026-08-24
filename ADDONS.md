@@ -25,10 +25,10 @@ grep -rn "handy-addon" src-tauri/src src --include='*.rs' --include='*.tsx'
 | `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`    |
 | `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows |
 | `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, icon);` in `change_tray_icon` |
-| `src/components/settings/advanced/AdvancedSettings.tsx` | 2                                  | Import + one JSX row                                      |
+| `src/components/settings/advanced/AdvancedSettings.tsx` | 4                                  | Two imports + two JSX rows                                |
 
 Counting the explanatory comment that accompanies each hook, `git diff upstream/main --stat`
-reports 15 insertions across those three files. Nothing else upstream is touched.
+reports 23 insertions across those three files. Nothing else upstream is touched.
 
 These in particular are deliberately **not** modified, because they are the repo's worst
 merge-conflict surfaces:
@@ -83,6 +83,8 @@ While recording, every attached display is covered by a full-screen, click-throu
 always-on-top window painting a soft orange vignette inward from all four edges. The centre
 60% × 60% of each screen is left completely untinted at any intensity. It turns off the moment
 recording stops (including on cancel and on error) and fades rather than snapping.
+Two fully clear windows, opposite each other, revolve clockwise around the screen once
+every ~10 s so the glow reads as live rather than as a stuck tint.
 
 It is independent of `overlay_style` — you can run it with the pill overlay off, which is the
 Linux default and the likely setup for anyone who wants this.
@@ -110,8 +112,16 @@ Linux default and the likely setup for anyone who wants this.
   - Linux: an empty GTK input shape. Tao's `set_ignore_cursor_events` installs a 1×1 region
     at (0,0) rather than an empty one, which would leave a live input pixel sitting exactly on
     the GNOME/KDE top-left hot corner.
-- **Rendering** animates opacity only, so it stays on the compositor. No `box-shadow`, no
-  `filter`, no animated gradients. `prefers-reduced-motion` suppresses the pulse.
+- **Rendering.** The vignette is a WebGL fragment shader over one full-screen triangle
+  per display, which is what makes the two revolving clear windows (180° apart, one
+  revolution per `--glow-spin-period`, default 10 s) affordable: GPU fill only, no
+  per-frame CSS repaint. A CSS-only rotation was rejected twice — an animated
+  `conic-gradient` mask re-rasterises a full-screen mask on the CPU every frame, and a
+  `transform: rotate` on a masked element needs a diagonal-sized (`142vmax`) backing
+  store, ~300 MB per 5K display. Enter/leave fade and the breathing pulse stay CSS
+  opacity animations on the compositor. The original CSS gradient layers remain in the
+  page as the fallback: no WebGL, a lost context, or `prefers-reduced-motion` leaves the
+  glow on screen, static.
 
 ### Known limitations
 
@@ -124,3 +134,19 @@ Linux default and the likely setup for anyone who wants this.
   fallback path relies on the `Notification` window type hint for stacking, which some window
   managers honour better than others.
 - UI strings are English only; other languages fall back to English via `fallbackLng`.
+
+---
+
+## Addon: Extra recording buffer, surfaced
+
+**Setting:** Advanced → Transcription → _Extra Recording Buffer_ (0–1500 ms).
+
+Not new behaviour: upstream's `extra_recording_buffer_ms` keeps the mic open for that
+long after the stop press so the last word is not clipped, but only exposes it in the
+Cmd+Shift+D debug tab. This addon renders the same `RecordingBuffer` component in the
+Advanced tab — same setting key, same Rust path, nothing duplicated. The default stays
+`0` (an upstream test asserts it); set it once and it persists.
+
+The Prominent glow deliberately still fades on the stop press, not at the end of the
+buffer: the pill overlay and tray switch to "transcribing" at the press, and the glow
+following them is the user's acknowledgement that the press registered.

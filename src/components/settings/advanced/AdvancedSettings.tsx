@@ -23,6 +23,7 @@ import { AccelerationSelector } from "../AccelerationSelector";
 import { LazyStreamClose } from "../LazyStreamClose";
 import { FillerWordRemoval } from "../FillerWordRemoval";
 import { ProminentGlow } from "@/addons/prominent-glow"; // handy-addon
+import { RecordingBuffer } from "../debug/RecordingBuffer"; // handy-addon
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -51,6 +52,8 @@ export const AdvancedSettings: React.FC = () => {
 
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>
         <VoiceActivityDetection descriptionMode="tooltip" grouped={true} />
+        {/* handy-addon: upstream keeps this in the Debug tab only */}
+        <RecordingBuffer descriptionMode="tooltip" grouped={true} />
         <FillerWordRemoval descriptionMode="tooltip" grouped={true} />
         <CustomWords descriptionMode="tooltip" grouped />
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
