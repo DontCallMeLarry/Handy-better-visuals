@@ -746,6 +746,7 @@ impl ShortcutAction for TranscribeAction {
                                         return;
                                     }
 
+                                    crate::addons::on_paste(&final_text); // handy-addon
                                     match utils::paste(final_text, ah_clone.clone()) {
                                         Ok(()) => debug!(
                                             "Text pasted successfully in {:?}",

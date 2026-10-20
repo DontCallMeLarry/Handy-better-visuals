@@ -15,20 +15,23 @@ it to re-apply after a conflicted merge:
 
 ```
 git diff upstream/main --stat -- src-tauri/src/lib.rs src-tauri/src/tray.rs \
+  src-tauri/src/shortcut/handler.rs src-tauri/src/actions.rs \
   src/components/settings/advanced/AdvancedSettings.tsx
 grep -rn "handy-addon" src-tauri/src src --include='*.rs' --include='*.tsx'
 ```
 
-| File                                                    | Code lines (excl. tagged comments) | What                                                      |
-| ------------------------------------------------------- | ---------------------------------- | --------------------------------------------------------- |
-| `src-tauri/src/lib.rs`                                  | 1                                  | `mod addons;`                                             |
-| `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`    |
-| `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows |
-| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, state);` in `set_tray_state`  |
-| `src/components/settings/advanced/AdvancedSettings.tsx` | 4                                  | Two imports + two JSX rows                                |
+| File                                                    | Code lines (excl. tagged comments) | What                                                                 |
+| ------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------- |
+| `src-tauri/src/lib.rs`                                  | 1                                  | `mod addons;`                                                        |
+| `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`               |
+| `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows            |
+| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, state);` in `set_tray_state`             |
+| `src-tauri/src/shortcut/handler.rs`                     | 3                                  | `intercept_transcribe_input` early return in `handle_shortcut_event` |
+| `src-tauri/src/actions.rs`                              | 1                                  | `addons::on_paste(&final_text)` before `utils::paste`                |
+| `src/components/settings/advanced/AdvancedSettings.tsx` | 6                                  | Three imports + three JSX rows                                       |
 
-Counting the explanatory comment that accompanies each hook, `git diff upstream/main --stat`
-reports 23 insertions across those three files. Nothing else upstream is touched.
+With the explanatory comments, the whole upstream diff fits on one screen. `git diff upstream/main --stat`
+on the files above shows it. Nothing else upstream is touched.
 
 These in particular are deliberately **not** modified, because they are the repo's worst
 merge-conflict surfaces:
@@ -51,10 +54,16 @@ merge-conflict surfaces:
 ```
 src-tauri/src/addons/
   mod.rs                       registry: init(), on_tray_state(), owns_window()
+  double_tap_repaste.rs        tap state machine, idle gate, stub cancel, re-paste, config
   prominent_glow/
     mod.rs                     config, persistence, frontend event bridge
     surface.rs                 the window pool (all platforms)
     macos.rs                   NSPanel specifics (tauri_panel! needs its own module)
+src/addons/double-tap-repaste/
+  DoubleTapRepaste.tsx         settings rows (toggle + window slider)
+  useDoubleTapRepaste.ts       event-bus hook (no Tauri commands)
+  i18n.ts                      runtime i18next namespace
+  index.ts
 src/addons/prominent-glow/
   ProminentGlow.tsx            settings rows
   useProminentGlow.ts          event-bus hook (no Tauri commands)
@@ -150,3 +159,54 @@ Advanced tab — same setting key, same Rust path, nothing duplicated. The defau
 The Prominent glow deliberately still fades on the stop press, not at the end of the
 buffer: the pill overlay and tray switch to "transcribing" at the press, and the glow
 following them is the user's acknowledgement that the press registered.
+
+---
+
+## Addon: Double-tap re-paste
+
+**Setting:** Advanced → Output → _Double-tap to re-paste_ (on by default), plus a
+_Double-tap window_ slider (150–600 ms, default 350) once enabled.
+
+While Handy is idle, tap the transcribe shortcut twice, quickly, and Handy pastes the last
+pasted text again. The first tap is a press that finds the pipeline idle and is released within
+200 ms. The second press must land between 25 ms and the window after that release. The
+recording the first tap started is cancelled, the second press and its release are swallowed,
+and the re-paste fires on that release. The paste goes through the normal `utils::paste` path,
+so paste method, clipboard handling, reliable paste and auto-submit all apply. Config lives in
+`addons_store.json` under `double_tap_repaste`.
+
+In Toggle mode, press to start and press to stop behave exactly as upstream. The stop press
+finds a recording, so it can never open a double-tap. A start press only becomes a double-tap
+if the stop press lands inside the window, which a real dictation never does. It works the same
+way in Push-to-talk and Hold-or-toggle.
+
+### How it works
+
+- **Hook.** `intercept_transcribe_input` is an early return in `handle_shortcut_event`, ahead
+  of the coordinator, so the second press and its release never reach it.
+- **Idle.** `addons::on_tray_state` feeds an atomic that is true while the tray is idle. A
+  press only opens a double-tap if it finds that flag set, so the first tap is always the one
+  that started the stub.
+- **Cancel.** `utils::cancel_current_operation` runs on its own thread, because with an
+  on-demand mic it waits for the stream to finish opening. A watchdog then polls for 3 s. If a
+  stub recording starts after the cancel and no new press was forwarded, it cancels again.
+  This covers a cancel that reached the recorder before the coordinator did.
+- **Paste on release.** The re-paste waits for the second release, so a modifier shortcut
+  such as Right Command is up before the synthetic Cmd+V.
+- **Which text.** The newest text the pipeline pasted before the first tap's press. A
+  one-line hook, `addons::on_paste(&final_text)` in `actions.rs`, fills an in-memory ring of
+  two just before each paste. On a fresh launch the ring is empty, so it falls back to the
+  newest non-empty history entry, post-processed text first.
+- **Events.** The frontend talks to Rust over `handy-addon:double-tap-repaste:{get,set,state}`.
+  No Tauri commands, so `bindings.ts` stays untouched.
+
+### Known limitations
+
+- The first tap briefly starts a recording, so the overlay, tray and glow flicker.
+- The second tap is swallowed even when the user then holds it. Release and press again to
+  record.
+- A double-tap while a transcription is still running is not a re-paste. Both presses go to
+  the coordinator as upstream handles them.
+- With nothing ever pasted and an empty history, the double-tap only logs.
+- Linux X11: auto-repeat from a held key never counts as a double-tap, because of the 25 ms
+  minimum gap.

@@ -36,6 +36,12 @@ pub fn handle_shortcut_event(
 
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
+        // handy-addon: a quick double-tap on the transcribe key re-pastes the last
+        // transcript instead of recording. The second tap and its release are
+        // consumed here and never reach the coordinator.
+        if crate::addons::intercept_transcribe_input(app, binding_id, is_pressed) {
+            return;
+        }
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
             coordinator.send_input(
                 binding_id,

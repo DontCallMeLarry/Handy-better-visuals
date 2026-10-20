@@ -7,11 +7,15 @@
 //! else lives in new files that can never conflict.
 //!
 //! Grep `handy-addon:` to find (or re-apply) the hooks. See ADDONS.md.
+//!
+//! Hooks: `init` (lib.rs), `on_tray_state` (tray.rs),
+//! `intercept_transcribe_input` (shortcut/handler.rs), `on_paste` (actions.rs).
 
 use tauri::AppHandle;
 
 use crate::tray::TrayIconState;
 
+pub mod double_tap_repaste;
 pub mod prominent_glow;
 
 /// Window-label prefix reserved for addon-owned windows.
@@ -37,6 +41,18 @@ fn window_label(addon: &str, index: usize) -> String {
 /// managers are in Tauri state and settings have loaded.
 pub fn init(app: &AppHandle) {
     prominent_glow::init(app);
+    double_tap_repaste::init(app);
+}
+
+/// Sees every transcribe-binding event before the coordinator. True means the
+/// event is consumed and the caller must not forward it.
+pub fn intercept_transcribe_input(app: &AppHandle, binding_id: &str, is_pressed: bool) -> bool {
+    double_tap_repaste::intercept_input(app, binding_id, is_pressed)
+}
+
+/// A transcript is about to be pasted; double-tap re-paste remembers it.
+pub fn on_paste(text: &str) {
+    double_tap_repaste::on_paste(text);
 }
 
 /// Recording-lifecycle fan-out.
@@ -49,4 +65,5 @@ pub fn init(app: &AppHandle) {
 /// prominent glow on.
 pub fn on_tray_state(app: &AppHandle, state: TrayIconState) {
     prominent_glow::set_recording(app, state == TrayIconState::Recording);
+    double_tap_repaste::on_tray_state(state);
 }
