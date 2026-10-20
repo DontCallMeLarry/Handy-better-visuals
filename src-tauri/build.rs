@@ -19,22 +19,52 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../lib/Handyer:$ORIGIN/../lib");
     }
 
+    // CPAL (handy-recorder's and rodio's) links two CoreAudio functions that
+    // only exist on macOS 14.2+. Weak-link the framework so Handy still
+    // launches on older macOS (minimumSystemVersion is 10.15).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-arg=-Wl,-weak_framework,CoreAudio");
+        link_clang_rt_osx();
+    }
+
     // Stage transcribe-cpp's shared runtime libraries (and the dlopen'd ggml
     // backend modules) for the installer. Self-gates on the shared /
     // dynamic-backends posture used by Linux and Windows; it's a no-op for the
     // static macOS `metal` build, where there is nothing to ship.
     stage_transcribe_runtime_libs();
 
-    // When ORT is dynamically linked (Windows CI sets ORT_LIB_LOCATION +
-    // ORT_PREFER_DYNAMIC_LINK to a baseline ONNX Runtime), ship its onnxruntime.dll
-    // next to Handyer.exe so the app loads our baseline build instead of statically
-    // embedding pyke's /arch:AVX2 one (which crashes at startup on pre-Haswell CPUs).
-    stage_onnxruntime_dll();
-
     // Must run after transcribe staging because that helper recreates transcribe-libs/.
     stage_vc_runtime_dlls();
 
     tauri_build::build()
+}
+
+/// Link clang's compiler runtime, which provides `__isPlatformVersionAtLeast`.
+///
+/// ggml-metal guards newer Metal APIs with `@available`. When the deployment
+/// target is older than the SDK (CI builds for macOS 11.0), clang lowers those
+/// checks to calls into `libclang_rt.osx.a`, which rustc does not link
+/// (`-nodefaultlibs`). ort-sys used to add it for its own static ONNX Runtime;
+/// without ORT, Handy has to. Local builds targeting the host macOS fold the
+/// checks away, which is why only CI hit the undefined symbol.
+fn link_clang_rt_osx() {
+    let output = std::process::Command::new("clang")
+        .arg("--print-resource-dir")
+        .output()
+        .expect("run `clang --print-resource-dir` to locate libclang_rt.osx.a");
+    assert!(
+        output.status.success(),
+        "`clang --print-resource-dir` failed; cannot locate libclang_rt.osx.a"
+    );
+    let resource_dir = String::from_utf8(output.stdout).expect("clang resource dir is UTF-8");
+    let darwin_dir = std::path::Path::new(resource_dir.trim()).join("lib/darwin");
+    assert!(
+        darwin_dir.join("libclang_rt.osx.a").exists(),
+        "libclang_rt.osx.a not found in {}",
+        darwin_dir.display()
+    );
+    println!("cargo:rustc-link-search=native={}", darwin_dir.display());
+    println!("cargo:rustc-link-lib=static=clang_rt.osx");
 }
 
 /// Stage the MSVC runtime DLLs into `transcribe-libs/` for app-local deployment.
@@ -102,50 +132,6 @@ fn stage_vc_runtime_dlls() {
     );
 }
 
-/// Copy the dynamically-linked ONNX Runtime `onnxruntime.dll` into the
-/// `transcribe-libs/` staging dir so `tauri.windows.conf.json` bundles it beside
-/// `Handyer.exe` (Windows resolves DLLs from the executable's directory).
-///
-/// No-op unless `ORT_PREFER_DYNAMIC_LINK` + `ORT_LIB_LOCATION` are set for a Windows
-/// target — i.e. the CI dynamic-link path. A plain static build (no env) skips this
-/// and keeps the embedded ORT, and non-Windows targets bundle their ORT elsewhere
-/// (see build.yml frameworks/deb.files steps), so they are ignored here.
-fn stage_onnxruntime_dll() {
-    use std::path::PathBuf;
-
-    println!("cargo:rerun-if-env-changed=ORT_LIB_LOCATION");
-    println!("cargo:rerun-if-env-changed=ORT_PREFER_DYNAMIC_LINK");
-
-    if std::env::var_os("ORT_PREFER_DYNAMIC_LINK").is_none() {
-        return;
-    }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
-        return;
-    }
-    let Some(lib_location) = std::env::var_os("ORT_LIB_LOCATION") else {
-        return;
-    };
-
-    let src = PathBuf::from(&lib_location).join("onnxruntime.dll");
-    if !src.exists() {
-        panic!(
-            "ORT_PREFER_DYNAMIC_LINK is set but {} does not exist; a dynamic ORT \
-             build must supply onnxruntime.dll to bundle",
-            src.display()
-        );
-    }
-
-    // transcribe-libs/ is already created by stage_transcribe_runtime_libs() on the
-    // Windows x86_64 dynamic-backends build and bundled by tauri.windows.conf.json;
-    // create it defensively so this is self-contained.
-    let dest_dir =
-        PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("transcribe-libs");
-    std::fs::create_dir_all(&dest_dir).expect("create transcribe-libs staging dir");
-    std::fs::copy(&src, dest_dir.join("onnxruntime.dll"))
-        .unwrap_or_else(|e| panic!("copy {}: {e}", src.display()));
-    println!("cargo:warning=Staged onnxruntime.dll for Windows bundling");
-}
-
 /// Stage transcribe-cpp's shared runtime libraries into `transcribe-libs/` so the
 /// installer can ship them next to the executable. One code path covers Windows
 /// (`.dll`) and Linux (versioned `.so`); the match-by-name filter below handles
@@ -205,7 +191,7 @@ fn stage_transcribe_runtime_libs() {
             let src = entry.path();
             let name = src.file_name().and_then(|s| s.to_str()).unwrap_or("");
             // Match by NAME, not extension: Linux versions its libs
-            // (libtranscribe.so.0, .so.0.1.3) and the loader needs the SONAME, so
+            // (libtranscribe.so.0, .so.0.2.0) and the loader needs the SONAME, so
             // an extension-only filter would miss the versioned names entirely.
             let is_lib = name.ends_with(".dll")
                 || name.ends_with(".dylib")
@@ -217,23 +203,24 @@ fn stage_transcribe_runtime_libs() {
         }
     }
 
-    // A Linux install dir carries each lib as a symlink chain (libfoo.so ->
-    // libfoo.so.0 -> libfoo.so.0.1.3), and tauri's deb/rpm bundlers flatten
-    // symlinks into real files — staging every name would triplicate each lib
-    // on disk and draw "not a symbolic link" warnings from ldconfig (issue
-    // #1639). Only one name per lib is ever resolved at runtime: the SONAME
-    // (`libfoo.so.N`) for the NEEDED core libs, and the bare unversioned name
-    // for the dlopen'd ggml backend modules. Stage exactly that name;
-    // `fs::copy` dereferences the symlink so the staged file is the real
-    // library.
+    // A Linux install dir carries each lib as a symlink chain (for example,
+    // libfoo.so -> libfoo.so.0.2 -> libfoo.so.0.2.0), and tauri's deb/rpm
+    // bundlers flatten symlinks into real files. Staging every name would
+    // triplicate each lib and draw "not a symbolic link" warnings from ldconfig
+    // (issue #1639). Only one name per lib is needed at runtime: the shortest
+    // versioned name is the SONAME for linked core libs, while a dlopen'd ggml
+    // backend module generally has only its bare unversioned name. Stage that
+    // name; `fs::copy` dereferences the symlink so the staged file is real.
     let mut best: std::collections::BTreeMap<&str, (&str, &PathBuf, usize)> = Default::default();
     for (name, src) in &libs {
         let (stem, rank) = match split_versioned_so(name) {
             // Windows/macOS names (.dll/.dylib) are unversioned: keep as-is.
             None => (name.as_str(), 0),
-            // Prefer the SONAME form (exactly one numeric suffix), then the
-            // bare `.so`; fully-versioned names only as a last resort.
-            Some((stem, depth)) => (stem, if depth == 1 { 0 } else { depth + 1 }),
+            // Prefer the shortest versioned name (`.so.0`, `.so.0.2`, etc.),
+            // then the bare `.so`; a full version is only the fallback when the
+            // install tree did not provide its SONAME symlink.
+            Some((stem, 0)) => (stem, usize::MAX),
+            Some((stem, depth)) => (stem, depth - 1),
         };
         match best.get(stem) {
             Some(&(_, _, existing)) if existing <= rank => {}
@@ -261,7 +248,7 @@ fn stage_transcribe_runtime_libs() {
 
 /// Split a versioned ELF shared-library name into (stem, version depth):
 /// `libfoo.so` -> ("libfoo", 0), `libfoo.so.0` -> ("libfoo", 1),
-/// `libfoo.so.0.1.3` -> ("libfoo", 3). Returns None for names that aren't a
+/// `libfoo.so.0.2.0` -> ("libfoo", 3). Returns None for names that aren't a
 /// `.so` optionally followed by dot-separated numeric components.
 fn split_versioned_so(name: &str) -> Option<(&str, usize)> {
     let idx = name.find(".so")?;

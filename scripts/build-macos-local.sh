@@ -26,10 +26,9 @@ if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   export PATH="$HOME/.cargo/bin:$PATH"
 fi
 
-if [ ! -f src-tauri/resources/models/silero_vad_v4.onnx ]; then
-  echo "Missing VAD model. Fetch it first:" >&2
-  echo "  mkdir -p src-tauri/resources/models" >&2
-  echo "  curl -o src-tauri/resources/models/silero_vad_v4.onnx https://blob.handy.computer/silero_vad_v4.onnx" >&2
+if [ ! -f src-tauri/resources/models/silero-vad-v6.2-F32.gguf ]; then
+  echo "Missing VAD model (tracked in git since upstream v0.9.8). Restore it:" >&2
+  echo "  git checkout -- src-tauri/resources/models/silero-vad-v6.2-F32.gguf" >&2
   exit 1
 fi
 
@@ -63,12 +62,6 @@ fi
 
 # A leftover read-write image from a failed run makes the next attempt fail.
 rm -f src-tauri/target/release/bundle/macos/rw.*.dmg
-
-# Intel Macs have no prebuilt ONNX Runtime; link Homebrew's copy dynamically.
-if [ "$(uname -m)" = "x86_64" ] && command -v brew >/dev/null 2>&1; then
-  export ORT_LIB_LOCATION="${ORT_LIB_LOCATION:-$(brew --prefix onnxruntime)/lib}"
-  export ORT_PREFER_DYNAMIC_LINK="${ORT_PREFER_DYNAMIC_LINK:-1}"
-fi
 
 bunx tauri build -b app -b dmg --config "$CONFIG" "$@"
 

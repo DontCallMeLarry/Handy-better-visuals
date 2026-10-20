@@ -24,7 +24,7 @@ grep -rn "handy-addon" src-tauri/src src --include='*.rs' --include='*.tsx'
 | `src-tauri/src/lib.rs`                                  | 1                                  | `mod addons;`                                             |
 | `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`    |
 | `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows |
-| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, icon);` in `change_tray_icon` |
+| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, state);` in `set_tray_state`  |
 | `src/components/settings/advanced/AdvancedSettings.tsx` | 4                                  | Two imports + two JSX rows                                |
 
 Counting the explanatory comment that accompanies each hook, `git diff upstream/main --stat`
@@ -91,7 +91,7 @@ Linux default and the likely setup for anyone who wants this.
 
 ### How it works
 
-- **Trigger.** Hooked into `tray::change_tray_icon`, the single function every recording
+- **Trigger.** Hooked into `tray::set_tray_state`, the single function every recording
   start / stop / cancel / error path calls, on every platform, regardless of overlay and tray
   settings. `TrayIconState::Recording` turns the glow on; anything else turns it off.
 - **Windows are pooled and never destroyed.** Upstream's app-wide `CloseRequested` handler

@@ -21,9 +21,17 @@ async resetBinding(id: string) : Promise<Result<BindingResponse, string>> {
     else return { status: "error", error: e  as any };
 }
 },
-async changePttSetting(enabled: boolean) : Promise<Result<null, string>> {
+async changeShortcutActivationSetting(activation: ShortcutActivation) : Promise<Result<null, string>> {
     try {
-    return { status: "ok", data: await TAURI_INVOKE("change_ptt_setting", { enabled }) };
+    return { status: "ok", data: await TAURI_INVOKE("change_shortcut_activation_setting", { activation }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeHoldThresholdMsSetting(ms: number) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_hold_threshold_ms_setting", { ms }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -232,6 +240,14 @@ async changePostProcessBaseUrlSetting(providerId: string, baseUrl: string) : Pro
     else return { status: "error", error: e  as any };
 }
 },
+async changePostProcessApiFormatSetting(providerId: string, apiFormat: PostProcessApiFormat) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_post_process_api_format_setting", { providerId, apiFormat }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changePostProcessApiKeySetting(providerId: string, apiKey: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_post_process_api_key_setting", { providerId, apiKey }) };
@@ -359,9 +375,33 @@ async changeVadEnabledSetting(enabled: boolean) : Promise<Result<null, string>> 
     else return { status: "error", error: e  as any };
 }
 },
+async changeLongFormChunkingSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_long_form_chunking_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeVadBackendSetting(backend: VadBackend) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_vad_backend_setting", { backend }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async changeFillerWordRemovalEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_filler_word_removal_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async changeChineseScriptSetting(script: ChineseScript) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_chinese_script_setting", { script }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -435,15 +475,7 @@ async changeTranscribeAcceleratorSetting(accelerator: TranscribeAcceleratorSetti
     else return { status: "error", error: e  as any };
 }
 },
-async changeOrtAcceleratorSetting(accelerator: OrtAcceleratorSetting) : Promise<Result<null, string>> {
-    try {
-    return { status: "ok", data: await TAURI_INVOKE("change_ort_accelerator_setting", { accelerator }) };
-} catch (e) {
-    if(e instanceof Error) throw e;
-    else return { status: "error", error: e  as any };
-}
-},
-async changeTranscribeGpuDevice(device: number) : Promise<Result<null, string>> {
+async changeTranscribeGpuDevice(device: string | null) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("change_transcribe_gpu_device", { device }) };
 } catch (e) {
@@ -516,6 +548,9 @@ async cancelOperation() : Promise<void> {
 },
 async isPortable() : Promise<boolean> {
     return await TAURI_INVOKE("is_portable");
+},
+async isUpdateChecksLocked() : Promise<boolean> {
+    return await TAURI_INVOKE("is_update_checks_locked");
 },
 async getAppDirPath() : Promise<Result<string, string>> {
     try {
@@ -640,6 +675,17 @@ async downloadModel(modelId: string) : Promise<Result<null, string>> {
 async deleteModel(modelId: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("delete_model", { modelId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async getRetiredModels() : Promise<RetiredModel[]> {
+    return await TAURI_INVOKE("get_retired_models");
+},
+async deleteRetiredModel(modelId: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("delete_retired_model", { modelId }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -941,7 +987,17 @@ settings_schema_version?: number;
  * Defaults to empty on partial stores; the load path merges in the
  * default bindings for any missing keys before the settings are used.
  */
-bindings?: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk?: boolean; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
+bindings?: Partial<{ [key in string]: ShortcutBinding }>; 
+/**
+ * Replaces the pre-0.10 `push_to_talk` bool; stores missing this key are
+ * migrated from it in `apply_settings_migrations`.
+ */
+shortcut_activation?: ShortcutActivation; 
+/**
+ * Hold-or-toggle only: a press held at least this long is push-to-talk,
+ * anything shorter is a tap that locks recording on.
+ */
+hold_threshold_ms?: number; audio_feedback?: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; show_whats_new_on_update?: boolean; 
 /**
  * The app version whose What's New the user has already seen. Fresh installs
  * default to the current version (nothing is "new" to them). Existing users
@@ -959,7 +1015,28 @@ selected_channel?: number | null; clamshell_microphone?: string | null; selected
  * after the target app actually reads the transcript, instead of after a
  * fixed delay. See `paste_tx`. macOS and Windows only.
  */
-reliable_paste?: boolean; typing_tool?: TypingTool; external_script_path?: string | null; filler_word_removal_enabled?: boolean; custom_filler_words?: string[] | null; transcribe_accelerator?: TranscribeAcceleratorSetting; ort_accelerator?: OrtAcceleratorSetting; transcribe_gpu_device?: number; extra_recording_buffer_ms?: number; vad_enabled?: boolean; 
+reliable_paste?: boolean; typing_tool?: TypingTool; external_script_path?: string | null; filler_word_removal_enabled?: boolean; custom_filler_words?: string[] | null; 
+/**
+ * Fresh installs default from the OS locale; existing stores are migrated
+ * in `apply_settings_migrations`.
+ */
+chinese_script?: ChineseScript; transcribe_accelerator?: TranscribeAcceleratorSetting; 
+/**
+ * Stable transcribe.cpp device selector. This is derived from the backend's
+ * `device_id` when available (or its name for backends such as Metal),
+ * never from the process-local device registry index.
+ */
+transcribe_gpu_device?: string | null; extra_recording_buffer_ms?: number; vad_enabled?: boolean; 
+/**
+ * Experimental detector implementation. Silero remains the stable default.
+ */
+vad_backend?: VadBackend; 
+/**
+ * Decode long audio in chunks cut at pauses, for models whose accuracy
+ * degrades on long audio. Independent of `vad_enabled`, which only
+ * decides whether silence is dropped from recordings.
+ */
+long_form_chunking?: boolean; 
 /**
  * Which recording overlay to show: None / Minimal / Live. Streaming mode is
  * not gated on this — that follows model capability. Migrated from the old
@@ -968,18 +1045,20 @@ reliable_paste?: boolean; typing_tool?: TypingTool; external_script_path?: strin
 overlay_style?: OverlayStyle }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
-export type AvailableAccelerators = { transcribe: string[]; ort: string[]; gpu_devices: GpuDeviceOption[] }
+export type AvailableAccelerators = { transcribe: string[]; gpu_devices: GpuDeviceOption[] }
 export type BindingResponse = { success: boolean; binding: ShortcutBinding | null; error: string | null }
+/**
+ * Script applied to Mandarin and Cantonese output. Other languages are never
+ * converted.
+ */
+export type ChineseScript = 
+/**
+ * Keep whatever script the model produced.
+ */
+"as_transcribed" | "simplified" | "traditional"
 export type ClipboardHandling = "dont_modify" | "copy_to_clipboard"
 export type CustomSounds = { start: boolean; stop: boolean }
-export type EngineType = 
-/**
- * Any GGML/GGUF model loaded through transcribe-cpp (Whisper, Parakeet,
- * Voxtral, Qwen3-ASR, Nemotron, …). The architecture is auto-detected from
- * the file, so this one variant covers the whole transcribe-cpp family.
- */
-"TranscribeCpp" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice" | "GigaAM" | "Canary" | "Cohere"
-export type GpuDeviceOption = { id: number; name: string; total_vram_mb: number }
+export type GpuDeviceOption = { id: string; name: string; total_vram_mb: number }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; post_process_requested: boolean }
 export type HistoryUpdatePayload = { action: "added"; entry: HistoryEntry } | { action: "updated"; entry: HistoryEntry } | { action: "deleted"; id: number } | { action: "toggled"; id: number }
 /**
@@ -998,7 +1077,7 @@ key_down: number; key_up: number; flags_changed: number; mouse: number; duration
 export type KeyboardImplementation = "tauri" | "handy_keys"
 export type LLMPrompt = { id: string; name: string; prompt: string }
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
-export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
+export type ModelInfo = { id: string; name: string; description: string; filename: string; source: ModelSource; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; supports_language_selection: boolean; is_custom: boolean; supports_streaming: boolean; supports_language_detection: boolean }
 export type ModelLoadStatus = { is_loaded: boolean; current_model: string | null }
 /**
  * Where a model comes from and how Handy obtains it — the routing discriminant
@@ -1025,7 +1104,6 @@ sha256: string | null } } |
  */
 "Local"
 export type ModelUnloadTimeout = "never" | "immediately" | "min_2" | "min_5" | "min_10" | "min_15" | "hour_1" | "sec_15"
-export type OrtAcceleratorSetting = "auto" | "cpu" | "cuda" | "directml" | "rocm"
 export type OverlayPosition = "top" | "bottom"
 /**
  * Which recording overlay to display. `Minimal` and `Live` share one base
@@ -1037,8 +1115,25 @@ export type OverlayStyle = "none" | "minimal" | "live"
 export type PaginatedHistory = { entries: HistoryEntry[]; has_more: boolean }
 export type PasteMethod = "ctrl_v" | "direct" | "none" | "shift_insert" | "ctrl_shift_v" | "external_script"
 export type PermissionAccess = "allowed" | "denied" | "unknown"
-export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null; supports_structured_output?: boolean }
+/**
+ * Request format a post-processing endpoint speaks. Built-in providers have a
+ * fixed format; only the custom provider lets the user change it.
+ */
+export type PostProcessApiFormat = 
+/**
+ * OpenAI-compatible Chat Completions (`/chat/completions`)
+ */
+"openai" | 
+/**
+ * Anthropic Messages (`/messages`)
+ */
+"anthropic"
+export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null; supports_structured_output?: boolean; api_format?: PostProcessApiFormat }
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
+/**
+ * A retired ONNX model found on disk.
+ */
+export type RetiredModel = { id: string; name: string; size_mb: number; replacement_repo: string }
 export type SecretMap = Partial<{ [key in string]: string }>
 export type SecureInputStatus = { 
 /**
@@ -1072,6 +1167,24 @@ uncovered_bindings: string[];
  * warning banner appears and explains why recording refused.
  */
 recorder_blocked: boolean }
+/**
+ * How the transcribe shortcut's key events drive a recording.
+ */
+export type ShortcutActivation = 
+/**
+ * Press to start, press again to stop.
+ */
+"toggle" | 
+/**
+ * Hold to record, release to stop.
+ */
+"push_to_talk" | 
+/**
+ * Hold to record and release to stop, or tap to keep recording until the
+ * next press. Which one it was is decided by how long the key was held
+ * (`hold_threshold_ms`).
+ */
+"hold_or_toggle"
 export type ShortcutBinding = { id: string; name: string; description: string; default_binding: string; current_binding: string }
 export type SoundTheme = "marimba" | "pop" | "custom"
 /**
@@ -1113,6 +1226,7 @@ export type StreamWorkKind = "transcribing" | "polishing"
 export type Theme = "system" | "light" | "dark"
 export type TranscribeAcceleratorSetting = "auto" | "cpu" | "gpu"
 export type TypingTool = "auto" | "wtype" | "kwtype" | "dotool" | "ydotool" | "xdotool"
+export type VadBackend = "silero" | "earshot"
 export type WindowsMicrophonePermissionStatus = { supported: boolean; overall_access: PermissionAccess; device_access: PermissionAccess; app_access: PermissionAccess; desktop_app_access: PermissionAccess }
 
 /** tauri-specta globals **/

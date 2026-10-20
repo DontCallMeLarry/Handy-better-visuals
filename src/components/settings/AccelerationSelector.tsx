@@ -4,18 +4,7 @@ import { SettingContainer } from "../ui/SettingContainer";
 import { Dropdown, type DropdownOption } from "../ui/Dropdown";
 import { useSettings } from "../../hooks/useSettings";
 import { commands } from "@/bindings";
-import type {
-  TranscribeAcceleratorSetting,
-  OrtAcceleratorSetting,
-} from "@/bindings";
-
-const ORT_LABELS: Record<OrtAcceleratorSetting, string> = {
-  auto: "Auto",
-  cpu: "CPU",
-  cuda: "CUDA",
-  directml: "DirectML",
-  rocm: "ROCm",
-};
+import type { TranscribeAcceleratorSetting } from "@/bindings";
 
 interface AccelerationSelectorProps {
   descriptionMode?: "tooltip" | "inline";
@@ -24,30 +13,28 @@ interface AccelerationSelectorProps {
 
 /**
  * transcribe.cpp dropdown encodes accelerator + device in a single value:
- *   "auto"   → accelerator=auto,  gpu_device=-1
- *   "cpu"    → accelerator=cpu,   gpu_device=-1
- *   "gpu:0"  → accelerator=gpu,   gpu_device=0
- *   "gpu:1"  → accelerator=gpu,   gpu_device=1
+ *   "auto"       → accelerator=auto, gpu_device=null
+ *   "cpu"        → accelerator=cpu,  gpu_device=null
+ *   "gpu:<id>"   → accelerator=gpu, stable opaque device identity
  */
 function encodeTranscribeValue(
   accelerator: TranscribeAcceleratorSetting,
-  gpuDevice: number,
+  gpuDevice: string | null,
 ): string {
   if (accelerator === "cpu") return "cpu";
-  if (accelerator === "gpu" && gpuDevice >= 0) return `gpu:${gpuDevice}`;
+  if (accelerator === "gpu" && gpuDevice !== null) return `gpu:${gpuDevice}`;
   return "auto";
 }
 
 function decodeTranscribeValue(value: string): {
   accelerator: TranscribeAcceleratorSetting;
-  gpuDevice: number;
+  gpuDevice: string | null;
 } {
-  if (value === "cpu") return { accelerator: "cpu", gpuDevice: -1 };
+  if (value === "cpu") return { accelerator: "cpu", gpuDevice: null };
   if (value.startsWith("gpu:")) {
-    const id = parseInt(value.slice(4), 10);
-    return { accelerator: "gpu", gpuDevice: id };
+    return { accelerator: "gpu", gpuDevice: value.slice(4) };
   }
-  return { accelerator: "auto", gpuDevice: -1 };
+  return { accelerator: "auto", gpuDevice: null };
 }
 
 export const AccelerationSelector: FC<AccelerationSelectorProps> = ({
@@ -60,7 +47,6 @@ export const AccelerationSelector: FC<AccelerationSelectorProps> = ({
   const [transcribeOptions, setTranscribeOptions] = useState<DropdownOption[]>(
     [],
   );
-  const [ortOptions, setOrtOptions] = useState<DropdownOption[]>([]);
 
   useEffect(() => {
     commands.getAvailableAccelerators().then((available) => {
@@ -90,76 +76,45 @@ export const AccelerationSelector: FC<AccelerationSelectorProps> = ({
         opts.push({ value: "cpu", label: "CPU" });
       }
       setTranscribeOptions(opts);
-
-      // ORT options (unchanged)
-      const ortVals = available.ort.includes("auto")
-        ? available.ort
-        : ["auto", ...available.ort];
-      setOrtOptions(
-        ortVals.map((v) => ({
-          value: v,
-          label: ORT_LABELS[v as OrtAcceleratorSetting] ?? v,
-        })),
-      );
     });
   }, [t]);
 
   const currentAccelerator = getSetting("transcribe_accelerator") ?? "auto";
-  const currentGpuDevice = getSetting("transcribe_gpu_device") ?? -1;
+  const currentGpuDevice = getSetting("transcribe_gpu_device") ?? null;
   const currentTranscribe = encodeTranscribeValue(
     currentAccelerator as TranscribeAcceleratorSetting,
-    currentGpuDevice as number,
+    currentGpuDevice as string | null,
   );
   const displayedTranscribe = transcribeOptions.some(
     (option) => option.value === currentTranscribe,
   )
     ? currentTranscribe
     : (transcribeOptions[0]?.value ?? null);
-  const currentOrt = getSetting("ort_accelerator") ?? "auto";
 
   const handleTranscribeChange = async (value: string) => {
     const { accelerator, gpuDevice } = decodeTranscribeValue(value);
-    await updateSetting("transcribe_accelerator", accelerator);
+    // Save the device first to avoid `gpu + null` being normalized to Auto.
     await updateSetting("transcribe_gpu_device", gpuDevice);
+    await updateSetting("transcribe_accelerator", accelerator);
   };
 
   return (
-    <>
-      <SettingContainer
-        title={t("settings.advanced.acceleration.transcribe.title")}
-        description={t("settings.advanced.acceleration.transcribe.description")}
-        descriptionMode={descriptionMode}
-        grouped={grouped}
-        layout="horizontal"
-      >
-        <Dropdown
-          options={transcribeOptions}
-          selectedValue={displayedTranscribe}
-          onSelect={handleTranscribeChange}
-          disabled={
-            isUpdating("transcribe_accelerator") ||
-            isUpdating("transcribe_gpu_device")
-          }
-        />
-      </SettingContainer>
-      {ortOptions.length > 2 && (
-        <SettingContainer
-          title={t("settings.advanced.acceleration.ort.title")}
-          description={t("settings.advanced.acceleration.ort.description")}
-          descriptionMode={descriptionMode}
-          grouped={grouped}
-          layout="horizontal"
-        >
-          <Dropdown
-            options={ortOptions}
-            selectedValue={currentOrt}
-            onSelect={(value) =>
-              updateSetting("ort_accelerator", value as OrtAcceleratorSetting)
-            }
-            disabled={isUpdating("ort_accelerator")}
-          />
-        </SettingContainer>
-      )}
-    </>
+    <SettingContainer
+      title={t("settings.advanced.acceleration.transcribe.title")}
+      description={t("settings.advanced.acceleration.transcribe.description")}
+      descriptionMode={descriptionMode}
+      grouped={grouped}
+      layout="horizontal"
+    >
+      <Dropdown
+        options={transcribeOptions}
+        selectedValue={displayedTranscribe}
+        onSelect={handleTranscribeChange}
+        disabled={
+          isUpdating("transcribe_accelerator") ||
+          isUpdating("transcribe_gpu_device")
+        }
+      />
+    </SettingContainer>
   );
 };

@@ -41,7 +41,7 @@ pub fn init(app: &AppHandle) {
 
 /// Recording-lifecycle fan-out.
 ///
-/// Hooked into `tray::change_tray_icon` because that is the one function every
+/// Hooked into `tray::set_tray_state` because that is the one function every
 /// start / stop / cancel / error path funnels through, on every platform, and
 /// independently of `overlay_style` and `show_tray_icon`. Hooking the overlay
 /// instead would miss users who run with the overlay disabled — which is the
