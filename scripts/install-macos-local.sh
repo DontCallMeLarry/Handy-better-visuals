@@ -48,6 +48,15 @@ if [ ! -d "$APP_SRC" ]; then
   exit 1
 fi
 
+# A failed or skipped build leaves the old bundle here, and installing it looks
+# like the change did nothing. HANDY_INSTALL_STALE=1 installs it anyway.
+STALE_BY="$(find "$REPO_ROOT/src-tauri/src" "$REPO_ROOT/src" -type f -newer "$APP_SRC/Contents/Info.plist" -print -quit)"
+if [ -n "$STALE_BY" ] && [ -z "${HANDY_INSTALL_STALE:-}" ]; then
+  echo "The build at $APP_SRC is older than ${STALE_BY#"$REPO_ROOT"/}." >&2
+  echo "Run scripts/build-macos-local.sh first (HANDY_INSTALL_STALE=1 skips this check)." >&2
+  exit 1
+fi
+
 # codesign writes its report line-by-line to unbuffered stderr; piping that
 # into a reader that exits early (grep -q, awk with exit) races a SIGPIPE,
 # which pipefail turns into exit 141 and set -e turns fatal. Capture first,

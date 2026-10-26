@@ -1,22 +1,13 @@
-//! Fork-local feature addons.
-//!
-//! Nothing in this directory exists upstream (github.com/cjpais/Handy). The
-//! whole point of the layout is that upstream files stay almost untouched, so
-//! `git pull upstream main` keeps being boring: every edit this fork makes to
-//! an upstream file is a *single line* tagged `handy-addon:`, and everything
-//! else lives in new files that can never conflict.
-//!
-//! Grep `handy-addon:` to find (or re-apply) the hooks. See ADDONS.md.
-//!
+//! Fork-local addons; upstream files carry only one-line `handy-addon:` hooks (ADDONS.md).
 //! Hooks: `init` (lib.rs), `on_tray_state` (tray.rs),
-//! `intercept_transcribe_input` (shortcut/handler.rs), `on_paste` (actions.rs).
+//! `intercept_shortcut` (shortcut/handler.rs), `on_paste` (actions.rs).
 
 use tauri::AppHandle;
 
 use crate::tray::TrayIconState;
 
-pub mod double_tap_repaste;
 pub mod prominent_glow;
+pub mod repaste_chord;
 
 /// Window-label prefix reserved for addon-owned windows.
 ///
@@ -41,18 +32,23 @@ fn window_label(addon: &str, index: usize) -> String {
 /// managers are in Tauri state and settings have loaded.
 pub fn init(app: &AppHandle) {
     prominent_glow::init(app);
-    double_tap_repaste::init(app);
+    repaste_chord::init(app);
 }
 
-/// Sees every transcribe-binding event before the coordinator. True means the
-/// event is consumed and the caller must not forward it.
-pub fn intercept_transcribe_input(app: &AppHandle, binding_id: &str, is_pressed: bool) -> bool {
-    double_tap_repaste::intercept_input(app, binding_id, is_pressed)
+/// Sees every shortcut event before upstream handles it. True means the event
+/// is consumed and the caller must not forward it.
+pub fn intercept_shortcut(
+    app: &AppHandle,
+    binding_id: &str,
+    hotkey_string: &str,
+    is_pressed: bool,
+) -> bool {
+    repaste_chord::intercept_input(app, binding_id, hotkey_string, is_pressed)
 }
 
-/// A transcript is about to be pasted; double-tap re-paste remembers it.
+/// A transcript is about to be pasted; the re-paste chord remembers it.
 pub fn on_paste(text: &str) {
-    double_tap_repaste::on_paste(text);
+    repaste_chord::on_paste(text);
 }
 
 /// Recording-lifecycle fan-out.
@@ -65,5 +61,5 @@ pub fn on_paste(text: &str) {
 /// prominent glow on.
 pub fn on_tray_state(app: &AppHandle, state: TrayIconState) {
     prominent_glow::set_recording(app, state == TrayIconState::Recording);
-    double_tap_repaste::on_tray_state(state);
+    repaste_chord::on_tray_state(state);
 }

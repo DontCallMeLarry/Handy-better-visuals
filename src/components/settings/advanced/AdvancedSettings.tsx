@@ -27,7 +27,7 @@ import { ChineseScriptSetting } from "../ChineseScript";
 import { VadBackendSelector } from "../VadBackendSelector";
 import { ProminentGlow } from "@/addons/prominent-glow"; // handy-addon
 import { RecordingBuffer } from "../debug/RecordingBuffer"; // handy-addon
-import { DoubleTapRepaste } from "@/addons/double-tap-repaste"; // handy-addon
+import { RepasteChord } from "@/addons/repaste-chord"; // handy-addon
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -53,7 +53,7 @@ export const AdvancedSettings: React.FC = () => {
         <ClipboardHandlingSetting descriptionMode="tooltip" grouped={true} />
         <AutoSubmit descriptionMode="tooltip" grouped={true} />
         {/* handy-addon */}
-        <DoubleTapRepaste descriptionMode="tooltip" grouped={true} />
+        <RepasteChord descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>

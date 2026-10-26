@@ -788,6 +788,8 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         "Using paste method: {:?}, delay before: {}ms, delay after: {}ms",
         paste_method, paste_delay_ms, paste_delay_after_ms
     );
+    #[cfg(target_os = "macos")]
+    input::log_paste_target();
 
     // Perform the paste operation
     match paste_method {

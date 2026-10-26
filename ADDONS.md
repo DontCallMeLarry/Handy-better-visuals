@@ -20,15 +20,16 @@ git diff upstream/main --stat -- src-tauri/src/lib.rs src-tauri/src/tray.rs \
 grep -rn "handy-addon" src-tauri/src src --include='*.rs' --include='*.tsx'
 ```
 
-| File                                                    | Code lines (excl. tagged comments) | What                                                                 |
-| ------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------- |
-| `src-tauri/src/lib.rs`                                  | 1                                  | `mod addons;`                                                        |
-| `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`               |
-| `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows            |
-| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, state);` in `set_tray_state`             |
-| `src-tauri/src/shortcut/handler.rs`                     | 3                                  | `intercept_transcribe_input` early return in `handle_shortcut_event` |
-| `src-tauri/src/actions.rs`                              | 1                                  | `addons::on_paste(&final_text)` before `utils::paste`                |
-| `src/components/settings/advanced/AdvancedSettings.tsx` | 6                                  | Three imports + three JSX rows                                       |
+| File                                                    | Code lines (excl. tagged comments) | What                                                         |
+| ------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------ |
+| `src-tauri/src/lib.rs`                                  | 1                                  | `mod addons;`                                                |
+| `src-tauri/src/lib.rs`                                  | 1                                  | `addons::init(app_handle);` in `initialize_core_logic`       |
+| `src-tauri/src/lib.rs`                                  | 1                                  | First `on_window_event` match arm, skipping addon windows    |
+| `src-tauri/src/tray.rs`                                 | 1                                  | `addons::on_tray_state(app, state);` in `set_tray_state`     |
+| `src-tauri/src/shortcut/handler.rs`                     | 3                                  | `intercept_shortcut` early return in `handle_shortcut_event` |
+| `src-tauri/src/actions.rs`                              | 1                                  | `addons::on_paste(&final_text)` before `utils::paste`        |
+| `src-tauri/src/input.rs`                                | 7                                  | `command_v_keycode()` for the re-paste chord's held paste    |
+| `src/components/settings/advanced/AdvancedSettings.tsx` | 6                                  | Three imports + three JSX rows                               |
 
 With the explanatory comments, the whole upstream diff fits on one screen. `git diff upstream/main --stat`
 on the files above shows it. Nothing else upstream is touched.
@@ -54,22 +55,22 @@ merge-conflict surfaces:
 ```
 src-tauri/src/addons/
   mod.rs                       registry: init(), on_tray_state(), owns_window()
-  double_tap_repaste.rs        tap state machine, idle gate, stub cancel, re-paste, config
   prominent_glow/
     mod.rs                     config, persistence, frontend event bridge
     surface.rs                 the window pool (all platforms)
     macos.rs                   NSPanel specifics (tauri_panel! needs its own module)
-src/addons/double-tap-repaste/
-  DoubleTapRepaste.tsx         settings rows (toggle + window slider)
-  useDoubleTapRepaste.ts       event-bus hook (no Tauri commands)
-  i18n.ts                      runtime i18next namespace
-  index.ts
+  repaste_chord.rs             twin-modifier detection, re-paste, config
 src/addons/prominent-glow/
   ProminentGlow.tsx            settings rows
   useProminentGlow.ts          event-bus hook (no Tauri commands)
   i18n.ts                      runtime i18next namespace
   index.ts
 public/prominent-glow.html     the glow itself: standalone HTML+CSS, no bundler
+src/addons/repaste-chord/
+  RepasteChord.tsx             settings row (toggle)
+  useRepasteChord.ts           event-bus hook (no Tauri commands)
+  i18n.ts                      runtime i18next namespace
+  index.ts
 ```
 
 ## Keeping up with upstream
@@ -162,51 +163,41 @@ following them is the user's acknowledgement that the press registered.
 
 ---
 
-## Addon: Double-tap re-paste
+## Addon: Re-paste chord
 
-**Setting:** Advanced → Output → _Double-tap to re-paste_ (on by default), plus a
-_Double-tap window_ slider (150–600 ms, default 350) once enabled.
+**Setting:** Advanced → Output → _Paste again shortcut_ (on by default).
 
-While Handy is idle, tap the transcribe shortcut twice, quickly, and Handy pastes the last
-pasted text again. The first tap is a press that finds the pipeline idle and is released within
-200 ms. The second press must land between 25 ms and the window after that release. The
-recording the first tap started is cancelled, the second press and its release are swallowed,
-and the re-paste fires on that release. The paste goes through the normal `utils::paste` path,
-so paste method, clipboard handling, reliable paste and auto-submit all apply. Config lives in
-`addons_store.json` under `double_tap_repaste`.
-
-In Toggle mode, press to start and press to stop behave exactly as upstream. The stop press
-finds a recording, so it can never open a double-tap. A start press only becomes a double-tap
-if the stop press lands inside the window, which a real dictation never does. It works the same
-way in Push-to-talk and Hold-or-toggle.
+Hold Left Command, then press Right Command, and Handy pastes the last pasted text again.
+Nothing records, and the press never reaches the coordinator. The general rule is the transcribe key pressed while its other-side twin is held. It needs a one-side modifier shortcut such as `command_right`. It is macOS only. The paste goes through the normal
+`utils::paste` path, so paste method, clipboard handling and auto-submit all apply. Config
+lives in `addons_store.json` under `repaste_chord`.
 
 ### How it works
 
-- **Hook.** `intercept_transcribe_input` is an early return in `handle_shortcut_event`, ahead
-  of the coordinator, so the second press and its release never reach it.
-- **Idle.** `addons::on_tray_state` feeds an atomic that is true while the tray is idle. A
-  press only opens a double-tap if it finds that flag set, so the first tap is always the one
-  that started the stub.
-- **Cancel.** `utils::cancel_current_operation` runs on its own thread, because with an
-  on-demand mic it waits for the stream to finish opening. A watchdog then polls for 3 s. If a
-  stub recording starts after the cancel and no new press was forwarded, it cancels again.
-  This covers a cancel that reached the recorder before the coordinator did.
-- **Paste on release.** The re-paste waits for the second release, so a modifier shortcut
-  such as Right Command is up before the synthetic Cmd+V.
-- **Which text.** The newest text the pipeline pasted before the first tap's press. A
-  one-line hook, `addons::on_paste(&final_text)` in `actions.rs`, fills an in-memory ring of
-  two just before each paste. On a fresh launch the ring is empty, so it falls back to the
-  newest non-empty history entry, post-processed text first.
-- **Events.** The frontend talks to Rust over `handy-addon:double-tap-repaste:{get,set,state}`.
+- **Hook.** `intercept_shortcut` is an early return at the top of `handle_shortcut_event`. It
+  sees every `transcribe` event before upstream does.
+- **Detection.** handy-keys fires the Right Command hotkey even with Left Command down. At
+  that press the addon reads the physical modifiers with `CGEventSourceFlagsState`. If the
+  twin is down and the tray is idle, it swallows the press and its release.
+- **Paste under the held key.** If Left Command is still down when Right Command comes up, the
+  addon pastes at once, on every tap. It swaps the clipboard like `utils::paste`, then taps
+  only V with the held modifier flags. It never sends a synthetic Command-up. That event would
+  clear the held key at the HID level, and the next tap would start a recording.
+- **Paste after keys up.** Otherwise a thread waits up to 2 s for both keys to come up. Then it
+  pastes through the normal paste path. The addon also takes this path when the paste method
+  is not Cmd+V, or when auto-submit or reliable paste is on.
+- **Which text.** The newest text the pipeline pasted before the press. A one-line hook,
+  `addons::on_paste(&final_text)` in `actions.rs`, fills an in-memory ring of two just before
+  each paste. On a fresh launch the ring is empty. It then falls back to the newest non-empty
+  history entry, post-processed text first.
+- **No nested locks.** The hook runs on the handy-keys thread. A lock held across a call that
+  locks again freezes every shortcut, so each guard drops before the next call.
+- **Events.** The frontend talks to Rust over `handy-addon:repaste-chord:{get,set,state}`.
   No Tauri commands, so `bindings.ts` stays untouched.
 
 ### Known limitations
 
-- The first tap briefly starts a recording, so the overlay, tray and glow flicker.
-- The second tap is swallowed even when the user then holds it. Release and press again to
-  record.
-- A double-tap while a transcription is still running is not a re-paste. Both presses go to
-  the coordinator as upstream handles them.
-- With nothing ever pasted and an empty history, the double-tap only logs.
-- Linux X11: auto-repeat from a held key never counts as a double-tap, because of the 25 ms
-  minimum gap.
+- Right Command first, then Left Command, records as usual.
+- A transcribe shortcut with a key, such as `option+space`, gets no chord.
+- The chord does nothing while recording or transcribing. That press goes to the coordinator.
+- With nothing ever pasted and an empty history, the chord only logs.

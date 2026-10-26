@@ -1,0 +1,608 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Paste probe</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f6f3;
+        --panel: #ffffff;
+        --fg: #1d1b18;
+        --muted: #6f6a63;
+        --line: #e3e0da;
+        --ok: #17803d;
+        --bad: #b42318;
+        --warn: #a15c07;
+        --accent: #c2541b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171614;
+          --panel: #211f1c;
+          --fg: #f1efeb;
+          --muted: #a19b92;
+          --line: #3a3732;
+          --ok: #5fd08a;
+          --bad: #ff7a6b;
+          --warn: #f2b25c;
+          --accent: #f08a4b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 20px 16px 40px;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.45 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 16px;
+        max-width: 70ch;
+      }
+      .status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 18px;
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      .status b {
+        font-weight: 600;
+      }
+      .yes {
+        color: var(--ok);
+      }
+      .no {
+        color: var(--bad);
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .stat {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 12px;
+      }
+      .stat .n {
+        font-size: 22px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+      }
+      .stat .l {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .stat.ok .n {
+        color: var(--ok);
+      }
+      .stat.bad .n {
+        color: var(--bad);
+      }
+      .stat.warn .n {
+        color: var(--warn);
+      }
+      .targets {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      label span {
+        font-weight: 400;
+        color: var(--muted);
+      }
+      textarea,
+      .editable {
+        width: 100%;
+        min-height: 140px;
+        padding: 10px;
+        background: var(--panel);
+        color: var(--fg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: inherit;
+        resize: vertical;
+        overflow: auto;
+      }
+      textarea:focus,
+      .editable:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      button {
+        font: inherit;
+        padding: 6px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        background: var(--panel);
+        color: var(--fg);
+        border: 1px solid var(--line);
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      .logwrap {
+        overflow-x: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 13px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 5px 10px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 500;
+        position: sticky;
+        top: 0;
+        background: var(--panel);
+      }
+      td.t,
+      td.d {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+      td.k {
+        white-space: nowrap;
+        font-weight: 600;
+      }
+      tr.ok td.k {
+        color: var(--ok);
+      }
+      tr.bad td.k {
+        color: var(--bad);
+      }
+      tr.warn td.k {
+        color: var(--warn);
+      }
+      tr.dim td {
+        color: var(--muted);
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Paste probe</h1>
+      <p class="sub">
+        Click into a box, then dictate or re-paste (hold Left Cmd, press Right
+        Cmd) as usual. Each Cmd+V that reaches this tab gets a verdict after 1.5
+        s. If an attempt adds no Cmd+V row at all, the keystroke never reached
+        this tab. Times are UTC to match Handy's log.
+      </p>
+
+      <div class="status" aria-live="polite">
+        <div>Page has focus: <b id="s-focus">?</b></div>
+        <div>Active element: <b id="s-active">?</b></div>
+        <div>Visibility: <b id="s-vis">?</b></div>
+      </div>
+
+      <div class="stats">
+        <div class="stat">
+          <div class="n" id="c-cmdv">0</div>
+          <div class="l">Cmd+V reached page</div>
+        </div>
+        <div class="stat ok">
+          <div class="n" id="c-landed">0</div>
+          <div class="l">Text landed</div>
+        </div>
+        <div class="stat bad">
+          <div class="n" id="c-pastenoinsert">0</div>
+          <div class="l">Paste event, nothing inserted</div>
+        </div>
+        <div class="stat bad">
+          <div class="n" id="c-nopaste">0</div>
+          <div class="l">Cmd+V, no paste event</div>
+        </div>
+        <div class="stat warn">
+          <div class="n" id="c-blur">0</div>
+          <div class="l">Times page lost focus</div>
+        </div>
+      </div>
+
+      <div class="targets">
+        <div>
+          <label for="plain"
+            >Plain textarea <span>(GitHub / GitLab comment box)</span></label
+          >
+          <textarea id="plain" placeholder="Paste target 1"></textarea>
+        </div>
+        <div>
+          <label id="rich-label"
+            >Rich editor <span>(Notion / Slack / Linear style)</span></label
+          >
+          <div
+            id="rich"
+            class="editable"
+            contenteditable="true"
+            role="textbox"
+            aria-multiline="true"
+            aria-labelledby="rich-label"
+          ></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" id="b-clear-targets">Clear boxes</button>
+        <button type="button" id="b-clear-log">Clear log and counts</button>
+        <button type="button" id="b-copy">Copy log</button>
+      </div>
+
+      <div class="logwrap">
+        <table>
+          <thead>
+            <tr>
+              <th>UTC</th>
+              <th>+ms</th>
+              <th>Event</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="log"></tbody>
+        </table>
+      </div>
+      <p class="hint">
+        "+ms" counts from the latest Cmd+V. MetaRight is usually your trigger
+        key; MetaLeft is the Cmd that Handy synthesizes for its paste. Copy log
+        overwrites your clipboard, so use it after testing.
+      </p>
+    </main>
+
+    <script>
+      (() => {
+        const VERDICT_MS = 1500;
+        const MAX_ROWS = 600;
+        const MODIFIERS = new Set(["Meta", "Control", "Alt", "Shift"]);
+
+        const entries = [];
+        const stats = {
+          cmdv: 0,
+          landed: 0,
+          pastenoinsert: 0,
+          nopaste: 0,
+          blur: 0,
+        };
+        let attempt = null;
+        let attemptSeq = 0;
+        let lastFocusEventAt = 0;
+
+        const $ = (id) => document.getElementById(id);
+        const tbody = $("log");
+
+        const utc = () => new Date().toISOString().slice(11, 23);
+
+        function describe(el) {
+          if (!el) return "none";
+          if (el === document.body) return "body";
+          if (el === document.documentElement) return "html";
+          if (el.id) return `#${el.id}`;
+          return el.tagName ? el.tagName.toLowerCase() : String(el);
+        }
+
+        function preview(text) {
+          const flat = text.replace(/\s+/g, " ").trim();
+          return flat.length > 32 ? `${flat.slice(0, 32)}…` : flat;
+        }
+
+        function add(kind, detail, cls = "") {
+          const since = attempt
+            ? Math.round(performance.now() - attempt.at)
+            : null;
+          const entry = { time: utc(), since, kind, detail, cls };
+          entries.push(entry);
+
+          const tr = document.createElement("tr");
+          if (cls) tr.className = cls;
+          for (const [c, v] of [
+            ["t", entry.time],
+            ["d", since === null ? "" : since],
+            ["k", kind],
+            ["", detail],
+          ]) {
+            const td = document.createElement("td");
+            if (c) td.className = c;
+            td.textContent = v;
+            tr.appendChild(td);
+          }
+          tbody.prepend(tr);
+          while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(-1);
+        }
+
+        function bump(key) {
+          stats[key] += 1;
+          $(`c-${key}`).textContent = stats[key];
+        }
+
+        function renderStatus() {
+          const focused = document.hasFocus();
+          const f = $("s-focus");
+          f.textContent = focused ? "yes" : "no";
+          f.className = focused ? "yes" : "no";
+          $("s-active").textContent = describe(document.activeElement);
+          $("s-vis").textContent = document.visibilityState;
+          return focused;
+        }
+
+        function startAttempt(e) {
+          bump("cmdv");
+          const id = ++attemptSeq;
+          const current = {
+            id,
+            at: performance.now(),
+            paste: false,
+            beforeinput: false,
+            landed: false,
+          };
+          attempt = current;
+          add(
+            "Cmd+V",
+            `#${id} active=${describe(document.activeElement)} pageFocus=${document.hasFocus()} trusted=${e.isTrusted}`,
+          );
+          setTimeout(() => settle(current), VERDICT_MS);
+        }
+
+        function settle(settled) {
+          const { id } = settled;
+          if (settled.landed) {
+            bump("landed");
+            add("verdict", `#${id} text landed`, "ok");
+          } else if (settled.paste) {
+            bump("pastenoinsert");
+            add(
+              "verdict",
+              settled.beforeinput
+                ? `#${id} beforeinput fired, browser dropped the insert (clipboard looked changed mid-paste, crbug.com/568453825)`
+                : `#${id} paste event fired, no beforeinput (focus not in an editable field?)`,
+              "bad",
+            );
+          } else {
+            bump("nopaste");
+            add(
+              "verdict",
+              `#${id} Cmd+V reached the page but no paste event fired`,
+              "bad",
+            );
+          }
+        }
+
+        window.addEventListener("focus", () => {
+          lastFocusEventAt = performance.now();
+          add(
+            "window focus",
+            `active=${describe(document.activeElement)}`,
+            "ok",
+          );
+          renderStatus();
+        });
+        window.addEventListener("blur", () => {
+          lastFocusEventAt = performance.now();
+          bump("blur");
+          add("window blur", "page lost keyboard focus", "warn");
+          renderStatus();
+        });
+        document.addEventListener("visibilitychange", () => {
+          add(
+            "visibility",
+            document.visibilityState,
+            document.visibilityState === "hidden" ? "warn" : "",
+          );
+          renderStatus();
+        });
+        document.addEventListener(
+          "focusin",
+          (e) => {
+            add("focusin", describe(e.target), "dim");
+            renderStatus();
+          },
+          true,
+        );
+        document.addEventListener(
+          "focusout",
+          (e) => {
+            add(
+              "focusout",
+              `${describe(e.target)} → ${describe(e.relatedTarget)}`,
+              "dim",
+            );
+            renderStatus();
+          },
+          true,
+        );
+        document.addEventListener(
+          "pointerdown",
+          (e) => {
+            add("click", describe(e.target), "dim");
+          },
+          true,
+        );
+
+        document.addEventListener(
+          "keydown",
+          (e) => {
+            if (MODIFIERS.has(e.key)) {
+              add("keydown", `${e.code}${e.repeat ? " (repeat)" : ""}`, "dim");
+            } else if (e.code === "KeyV" && (e.metaKey || e.ctrlKey)) {
+              startAttempt(e);
+            } else if (e.key === "Enter") {
+              add("keydown", "Enter", "dim");
+            }
+          },
+          true,
+        );
+        document.addEventListener(
+          "keyup",
+          (e) => {
+            if (MODIFIERS.has(e.key) || e.code === "KeyV") {
+              add("keyup", e.code, "dim");
+            }
+          },
+          true,
+        );
+
+        document.addEventListener(
+          "paste",
+          (e) => {
+            const dt = e.clipboardData;
+            const types = dt ? Array.from(dt.types) : [];
+            const text = dt ? dt.getData("text/plain") : "";
+            if (attempt) attempt.paste = true;
+            add(
+              "paste",
+              `on ${describe(e.target)} types=[${types.join(", ")}] chars=${text.length} "${preview(text)}"`,
+              text.length ? "" : "warn",
+            );
+          },
+          true,
+        );
+
+        document.addEventListener(
+          "beforeinput",
+          (e) => {
+            if (e.inputType.startsWith("insertFromPaste")) {
+              if (attempt) attempt.beforeinput = true;
+              // Chromium empties this when it is about to drop the paste.
+              const text = e.dataTransfer
+                ? e.dataTransfer.getData("text/plain")
+                : (e.data ?? "");
+              add(
+                "beforeinput",
+                `${e.inputType} on ${describe(e.target)} chars=${text.length}`,
+                text.length ? "dim" : "warn",
+              );
+            }
+          },
+          true,
+        );
+        document.addEventListener(
+          "input",
+          (e) => {
+            if (!e.inputType.startsWith("insertFromPaste")) return;
+            if (attempt && !attempt.landed) {
+              attempt.landed = true;
+              add("inserted", `into ${describe(e.target)}`, "ok");
+            } else {
+              add(
+                "inserted",
+                `into ${describe(e.target)} (no pending Cmd+V)`,
+                "warn",
+              );
+            }
+          },
+          true,
+        );
+
+        let lastFocused = renderStatus();
+        let lastActive = document.activeElement;
+        setInterval(() => {
+          const focused = renderStatus();
+          const recentEvent = performance.now() - lastFocusEventAt < 250;
+          if (focused !== lastFocused && !recentEvent) {
+            add(
+              "focus poll",
+              `page focus now ${focused} with no focus/blur event`,
+              "warn",
+            );
+          }
+          if (document.activeElement !== lastActive && !recentEvent) {
+            add(
+              "focus poll",
+              `active element now ${describe(document.activeElement)}`,
+              "dim",
+            );
+          }
+          lastFocused = focused;
+          lastActive = document.activeElement;
+        }, 100);
+
+        $("b-clear-targets").addEventListener("click", () => {
+          $("plain").value = "";
+          $("rich").textContent = "";
+        });
+        $("b-clear-log").addEventListener("click", () => {
+          entries.length = 0;
+          tbody.textContent = "";
+          attempt = null;
+          for (const key of Object.keys(stats)) {
+            stats[key] = 0;
+            $(`c-${key}`).textContent = "0";
+          }
+        });
+        $("b-copy").addEventListener("click", async () => {
+          const header =
+            `paste-probe ${navigator.userAgent}\n` +
+            `cmdv=${stats.cmdv} landed=${stats.landed} paste_no_insert=${stats.pastenoinsert} ` +
+            `no_paste=${stats.nopaste} blur=${stats.blur}\n`;
+          const body = entries
+            .map((e) => `${e.time}\t${e.since ?? ""}\t${e.kind}\t${e.detail}`)
+            .join("\n");
+          const text = header + body;
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            const scratch = document.createElement("textarea");
+            scratch.value = text;
+            document.body.appendChild(scratch);
+            scratch.select();
+            document.execCommand("copy");
+            scratch.remove();
+          }
+          add("copied", `${entries.length} rows`, "dim");
+        });
+
+        add("ready", `userAgent=${navigator.userAgent}`, "dim");
+      })();
+    </script>
+  </body>
+</html>

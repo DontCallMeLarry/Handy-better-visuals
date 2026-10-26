@@ -144,6 +144,77 @@ mod macos {
             }
         }
     }
+
+    // kCGEventSourceStateHIDSystemState: what the hardware reports, so a
+    // physically held key shows up even if no app has seen its event yet.
+    const HID_SYSTEM_STATE: i32 = 1;
+    // Device-dependent modifier bits (NX_DEVICE*KEYMASK in IOLLEvent.h). The
+    // generic Command/Shift/... masks cannot tell left from right.
+    const DEVICE_MODIFIERS: [(u64, &str); 8] = [
+        (0x0001, "ctrl_left"),
+        (0x2000, "ctrl_right"),
+        (0x0002, "shift_left"),
+        (0x0004, "shift_right"),
+        (0x0008, "cmd_left"),
+        (0x0010, "cmd_right"),
+        (0x0020, "opt_left"),
+        (0x0040, "opt_right"),
+    ];
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceFlagsState(state_id: i32) -> u64;
+    }
+
+    pub(super) fn paste_target_summary() -> String {
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        let (app, pid) = match workspace.frontmostApplication() {
+            Some(running) => (
+                running
+                    .bundleIdentifier()
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "<no bundle id>".into()),
+                running.processIdentifier(),
+            ),
+            None => ("<none>".into(), -1),
+        };
+
+        // SAFETY: CGEventSourceFlagsState only reads the current modifier state.
+        let flags = unsafe { CGEventSourceFlagsState(HID_SYSTEM_STATE) };
+        let held: Vec<&str> = DEVICE_MODIFIERS
+            .iter()
+            .filter(|(mask, _)| flags & mask != 0)
+            .map(|(_, name)| *name)
+            .collect();
+        let held = if held.is_empty() {
+            "none".to_string()
+        } else {
+            held.join("+")
+        };
+
+        format!(
+            "frontmost={app} pid={pid} held_modifiers={held} secure_input={}",
+            crate::secure_input::is_enabled_now()
+        )
+    }
+}
+
+/// Logs where a paste chord is about to land: frontmost app, physically held
+/// modifiers, and secure input. A lost paste looks healthy on the clipboard
+/// side, so this line is what separates a focus problem from a clipboard one.
+#[cfg(target_os = "macos")]
+pub fn log_paste_target() {
+    log::info!("[paste-target] {}", macos::paste_target_summary());
+}
+
+/// handy-addon: the active layout's V keycode, for the re-paste chord's
+/// held-Command paste. Resolved like Cmd+V, so call it on the main thread.
+#[cfg(target_os = "macos")]
+pub fn command_v_keycode() -> u16 {
+    match macos::command_v_key() {
+        Key::Other(code) => u16::try_from(code).unwrap_or(9),
+        _ => 9,
+    }
 }
 
 /// Wrapper for Enigo to store in Tauri's managed state.
